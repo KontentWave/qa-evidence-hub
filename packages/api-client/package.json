@@ -1,0 +1,28 @@
+{
+  "name": "@qa-evidence-hub/api-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "generate": "openapi-typescript ../../apps/api/openapi.json -o ./src/generated/openapi.ts",
+    "check": "node --input-type=module -e \"import fs from 'node:fs/promises'; import os from 'node:os'; import path from 'node:path'; import { execFileSync } from 'node:child_process'; const tmp = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'qaeh-oapi-')), 'openapi.ts'); try { execFileSync('pnpm', ['exec', 'openapi-typescript', '../../apps/api/openapi.json', '-o', tmp], { stdio: 'inherit' }); const expected = await fs.readFile(tmp, 'utf8'); const actual = await fs.readFile('./src/generated/openapi.ts', 'utf8').catch(() => ''); if (actual !== expected) { console.error('OpenAPI client drift detected in packages/api-client/src/generated/openapi.ts. Run pnpm openapi:generate.'); process.exit(1); } } finally { await fs.rm(path.dirname(tmp), { recursive: true, force: true }); }\"",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "openapi-fetch": "0.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}

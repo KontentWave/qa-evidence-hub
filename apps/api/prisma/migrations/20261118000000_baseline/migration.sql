@@ -1,0 +1,3 @@
+-- Phase 1 Slice 1 (P1-01) baseline migration.
+-- Intentionally comment-only: initializes Prisma's _prisma_migrations ledger
+-- without creating permanent business or synthetic test tables.

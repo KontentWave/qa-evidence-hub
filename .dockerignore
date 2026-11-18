@@ -1,0 +1,30 @@
+# Version control and workspace metadata
+.git
+.gitignore
+.github
+.vscode
+*.code-workspace
+
+# Secrets, keys, and local environment files
+.env
+.env.*
+*.pem
+*.key
+*.crt
+
+# Host dependencies and build outputs
+node_modules
+.pnpm-store
+**/node_modules
+**/dist
+**/.next
+**/coverage
+**/*.tsbuildinfo
+**/*.log
+.DS_Store
+
+# Non-container specs, test suites, and operational scripts
+specs
+scripts
+compose*.yaml
+infra

@@ -1,0 +1,42 @@
+# Local development override (docker compose -f compose.yaml -f compose.dev.yaml up).
+# Adds local build targets and hot-reload source mounts only; never used in production.
+services:
+  api:
+    image: qa-evidence-hub/api:dev
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: deps
+    working_dir: /workspace/apps/api
+    user: node
+    environment:
+      NODE_ENV: development
+    command: ["sh", "-c", "pnpm prisma:generate && pnpm start:dev"]
+    volumes:
+      - ./apps/api/src:/workspace/apps/api/src:ro
+      - ./apps/api/prisma:/workspace/apps/api/prisma:ro
+      - ./apps/api/prisma.config.ts:/workspace/apps/api/prisma.config.ts:ro
+      - ./apps/api/tsconfig.json:/workspace/apps/api/tsconfig.json:ro
+      - ./apps/api/tsconfig.build.json:/workspace/apps/api/tsconfig.build.json:ro
+      - ./apps/api/nest-cli.json:/workspace/apps/api/nest-cli.json:ro
+
+  web:
+    image: qa-evidence-hub/web:dev
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: deps
+    working_dir: /workspace/apps/web
+    user: node
+    environment:
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: "1"
+    command: ["sh", "-c", "pnpm --dir /workspace/packages/api-client build && pnpm dev"]
+    volumes:
+      - ./packages/api-client/src:/workspace/packages/api-client/src:ro
+      - ./packages/api-client/tsconfig.json:/workspace/packages/api-client/tsconfig.json:ro
+      - ./apps/web/app:/workspace/apps/web/app:ro
+      - ./apps/web/src:/workspace/apps/web/src:ro
+      - ./apps/web/public:/workspace/apps/web/public:ro
+      - ./apps/web/next.config.mjs:/workspace/apps/web/next.config.mjs:ro
+      - ./apps/web/tsconfig.json:/workspace/apps/web/tsconfig.json:ro
