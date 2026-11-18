@@ -1,0 +1,16 @@
+/.vscode
+/.github/docs/QA_Evidence_Hub_Phase1_Slice_Planning_Prompt.md
+
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+node_modules/
+.pnpm-store/
+dist/
+.next/
+coverage/
+*.log
+.DS_Store
