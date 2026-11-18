@@ -1,0 +1,18 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+allowBuilds:
+  '@nestjs/core': false
+  '@prisma/engines': true
+  '@scarf/scarf': false
+  '@swc/core': false
+  esbuild: false
+  prisma: true
+  sharp: false
+  unrs-resolver: false
+
+minimumReleaseAgeExclude:
+  - '@vitest/mocker@5.1.1'
+  - '@vitest/spy@5.1.1'
+  - vitest@5.1.1

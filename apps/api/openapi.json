@@ -1,0 +1,116 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "API process is live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LivenessResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Check API process liveness",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/health/ready": {
+      "get": {
+        "operationId": "getHealthReadiness",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "API and PostgreSQL connection are ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessOkResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "API cannot verify PostgreSQL readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessUnavailableResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Check API database readiness via bounded SELECT 1",
+        "tags": [
+          "health"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "QA Evidence Hub API",
+    "description": "Phase 1 HTTP API contract for QA Evidence Hub",
+    "version": "0.1.0",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "schemas": {
+      "LivenessResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ],
+            "example": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "ReadinessOkResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready"
+            ],
+            "example": "ready"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "ReadinessUnavailableResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_ready"
+            ],
+            "example": "not_ready"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      }
+    }
+  }
+}

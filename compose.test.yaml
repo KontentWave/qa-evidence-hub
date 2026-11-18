@@ -1,0 +1,36 @@
+services:
+  postgres_test:
+    image: postgres:17-bookworm@sha256:40865bc877a289da75963d97d72b59633f639fc5af7a4e856bfa3714cae5b536
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - max_connections=30
+    environment:
+      POSTGRES_DB: ${TEST_POSTGRES_DB:-qaeh_test}
+      POSTGRES_USER: ${TEST_POSTGRES_USER:-qaeh_test}
+      POSTGRES_PASSWORD: ${TEST_POSTGRES_PASSWORD:-qaeh_test_ephemeral}
+    ports:
+      - "127.0.0.1::5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    networks:
+      - test_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+
+networks:
+  test_net:
+    internal: false
+
+volumes:
+  postgres_test_data:
