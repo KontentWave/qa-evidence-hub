@@ -22,11 +22,40 @@ export function validateWorkflowYaml(content, relPath, { isPullRequestCi = false
     errors.push(`${relPath}: pull_request_target trigger is forbidden`);
   }
 
+  let inRunBlock = false;
+  let runBlockIndent = 0;
+
   lines.forEach((rawLine, index) => {
     const lineNo = index + 1;
+    const indent = rawLine.match(/^ */)?.[0]?.length ?? 0;
     const withoutComment = rawLine.replace(/\s+#.*$/, '').trim();
     if (!withoutComment || withoutComment.startsWith('#')) {
       return;
+    }
+
+    if (inRunBlock) {
+      if (indent > runBlockIndent) {
+        if (rawLine.includes('${{')) {
+          errors.push(
+            `${relPath}:${lineNo}: inline GitHub expression \${{ ... }} inside run: block is forbidden; bind via step env: instead`,
+          );
+        }
+      } else {
+        inRunBlock = false;
+      }
+    }
+
+    const runKeyMatch = /^(?:-\s+)?run:\s*(.*)$/.exec(withoutComment);
+    if (runKeyMatch) {
+      const inlineRun = runKeyMatch[1];
+      if (inlineRun === '|' || inlineRun === '>-' || inlineRun === '>') {
+        inRunBlock = true;
+        runBlockIndent = indent;
+      } else if (rawLine.includes('${{')) {
+        errors.push(
+          `${relPath}:${lineNo}: inline GitHub expression \${{ ... }} inside run: command is forbidden; bind via step env: instead`,
+        );
+      }
     }
 
     const usesMatch = /^(?:-\s+)?uses:\s*['"]?([^\s'"]+)['"]?\s*$/.exec(withoutComment);

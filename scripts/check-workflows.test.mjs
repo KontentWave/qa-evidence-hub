@@ -32,6 +32,7 @@ jobs:
       R2_SECRET_ACCESS_KEY: \${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v4
+      - run: echo "\${{ github.event.pull_request.title }}"
 `;
   const errors = validateWorkflowYaml(invalidCi, '.github/workflows/ci.yml', {
     isPullRequestCi: true,
@@ -40,6 +41,7 @@ jobs:
   assert.ok(errors.some((e) => /write permission is forbidden/.test(e)));
   assert.ok(errors.some((e) => /R2 secret reference is forbidden/.test(e)));
   assert.ok(errors.some((e) => /40-char lowercase commit SHA/.test(e)));
+  assert.ok(errors.some((e) => /inline GitHub expression/.test(e)));
 });
 
 test('rejects release workflow triggered on pull_request', () => {
