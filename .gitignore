@@ -10,8 +10,12 @@
 node_modules/
 .pnpm-store/
 dist/
+dist-bdd/
 .next/
 coverage/
+playwright-report/
+test-results/
+.security-reports/
 *.tsbuildinfo
 next-env.d.ts
 *.log

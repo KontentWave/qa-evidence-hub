@@ -7,8 +7,12 @@ export default tseslint.config(
     ignores: [
       '**/node_modules/**',
       '**/dist/**',
+      '**/dist-bdd/**',
       '**/.next/**',
       '**/coverage/**',
+      '**/playwright-report/**',
+      '**/test-results/**',
+      '**/.security-reports/**',
       'packages/api-client/src/generated/**',
       'scripts/sync-sheet-apps-script.gs',
     ],

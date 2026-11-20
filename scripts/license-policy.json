@@ -1,0 +1,64 @@
+{
+  "policyVersion": "1.0.0",
+  "docRef": ".github/docs/runbook.md#license-compliance-policy-and-reviewed-exceptions",
+  "allowedSpdxIds": [
+    "0BSD",
+    "Apache-2.0",
+    "BlueOak-1.0.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "PSF-2.0",
+    "Python-2.0",
+    "Unlicense"
+  ],
+  "reviewedExceptions": [
+    {
+      "packagePattern": "@img/sharp-libvips-*",
+      "license": "LGPL-3.0-or-later",
+      "scope": "runtime-dynamic-library",
+      "reviewedAt": "2026-11-20",
+      "reviewedBy": "KontentWave",
+      "docRef": ".github/docs/runbook.md#license-compliance-policy-and-reviewed-exceptions",
+      "rationale": "Prebuilt unmodified libvips shared library dynamically linked by Next.js/Sharp inside private server containers; QA Evidence Hub is a private single-owner SaaS/VPS deployment and never redistributes modified libvips binaries."
+    },
+    {
+      "packagePattern": "lightningcss*",
+      "license": "MPL-2.0",
+      "scope": "build-and-standalone-css",
+      "reviewedAt": "2026-11-20",
+      "reviewedBy": "KontentWave",
+      "docRef": ".github/docs/runbook.md#license-compliance-policy-and-reviewed-exceptions",
+      "rationale": "File-level weak-copyleft CSS parser/minifier bundled unmodified by Next.js 16; no MPL-covered source files are modified."
+    },
+    {
+      "packagePattern": "elkjs",
+      "license": "EPL-2.0",
+      "scope": "dev-only",
+      "reviewedAt": "2026-11-20",
+      "reviewedBy": "KontentWave",
+      "docRef": ".github/docs/runbook.md#license-compliance-policy-and-reviewed-exceptions",
+      "rationale": "Transitive Prisma CLI Studio layout helper used only in local/CI tooling and pruned from production container stages; unmodified weak copyleft."
+    },
+    {
+      "packagePattern": "caniuse-lite",
+      "license": "CC-BY-4.0",
+      "scope": "build-only",
+      "reviewedAt": "2026-11-20",
+      "reviewedBy": "KontentWave",
+      "docRef": ".github/docs/runbook.md#license-compliance-policy-and-reviewed-exceptions",
+      "rationale": "Browser support dataset consumed by Next.js/Browserslist during compilation only; pruned from production runtime."
+    },
+    {
+      "packagePattern": "spdx-exceptions",
+      "license": "CC-BY-3.0",
+      "scope": "dev-only",
+      "reviewedAt": "2026-11-20",
+      "reviewedBy": "KontentWave",
+      "docRef": ".github/docs/runbook.md#license-compliance-policy-and-reviewed-exceptions",
+      "rationale": "Canonical SPDX exception identifier list used by package-manifest normalization during build/dev only."
+    }
+  ]
+}
