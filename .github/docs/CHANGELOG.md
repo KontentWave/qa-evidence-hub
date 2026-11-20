@@ -4,7 +4,7 @@ All notable changes to QA Evidence Hub are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0 versions (`0.x.y`) reflect active Phase 1 development on synthetic data only; real client data remains unauthorized until `F03`–`F04` and the section 8 production audit verdict pass in `P1-13`.
 
-## [0.2.0-rc.1] - 2026-11-20
+## [0.2.0-rc.2] - 2026-11-20
 
 ### Added (`P1-02` — CI pipeline, repository controls, and `F01`/`F02` gate completion)
 

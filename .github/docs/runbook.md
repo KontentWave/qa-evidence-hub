@@ -99,7 +99,7 @@ Enforced by `scripts/security-scan.mjs` and `scripts/check-static-security.mjs`:
 
 ### Private GHCR Release & SBOM Traceability (`.github/workflows/release.yml`)
 
-1. Triggered automatically on pushes to `main`, pushes of protected `v[0-9]+.[0-9]+.[0-9]*` tags, or `workflow_dispatch` on `main`.
+1. Triggered automatically on pushes to `main`, pushes of protected `v*` SemVer tags, or `workflow_dispatch` on `main`.
 2. Job `verify-and-test` runs full quality, OpenAPI, unit/coverage, PostgreSQL integration, Foundation BDD, secret, static, dependency, and license gates.
 3. Job `build-scan-smoke-publish` builds `ghcr.io/kontentwave/qa-evidence-hub-api` and `ghcr.io/kontentwave/qa-evidence-hub-web` **once**, scans those exact local image IDs with Trivy, generates SPDX 2.3 JSON SBOMs with Syft, smoke-tests those exact images behind Nginx (`f01-containers.test.mjs` + Playwright), pushes the unmodified images to private GHCR packages, verifies anonymous pull denial (`401`/`403`), and uploads `release-sboms-and-provenance-<sha>` (`qa-evidence-hub-api.spdx.json`, `qa-evidence-hub-web.spdx.json`, `release-provenance.json`, `sha256sums.txt`) retained for 90 days.
 4. **Package access verification note:** Because `org.opencontainers.image.source` is intentionally omitted prior to initial package creation, GHCR creates both packages with `"visibility": "private"` without automatically inheriting public-repository read permissions. Verify package visibility periodically via `gh api /user/packages/container/qa-evidence-hub-api --jq '.visibility'` and `gh api /user/packages/container/qa-evidence-hub-web --jq '.visibility'`.
