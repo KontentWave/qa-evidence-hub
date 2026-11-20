@@ -214,45 +214,42 @@ jobs:
             echo "web_digest=${WEB_DIGEST}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Verify GHCR packages are private and reject anonymous pulls
+      - name: Probe GHCR anonymous pull status for API and Web manifests
         id: visibility
         run: |
           OWNER_LC="${{ steps.build_once.outputs.owner_lc }}"
           API_DIGEST="${{ steps.publish.outputs.api_digest }}"
           WEB_DIGEST="${{ steps.publish.outputs.web_digest }}"
 
-          check_private_package() {
+          probe_anonymous_pull() {
             local pkg="$1"
             local digest="$2"
+            local accept_hdr="application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json"
             local unauth_code
             unauth_code=$(curl -s -o /dev/null -w '%{http_code}' \
-              -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+              -H "Accept: ${accept_hdr}" \
               "https://ghcr.io/v2/${OWNER_LC}/${pkg}/manifests/${digest}")
             if [ "${unauth_code}" = "200" ]; then
-              echo "ERROR: ${pkg} manifest returned 200 without auth (package is publicly exposed!)" >&2
-              exit 1
+              echo "200"
+              return
             fi
 
             local anon_tok
             anon_tok=$(curl -s "https://ghcr.io/token?scope=repository:${OWNER_LC}/${pkg}:pull" | node -e 'try{const d=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(d.token||"");}catch{}')
-            local anon_manifest_code="401"
             if [ -n "${anon_tok}" ]; then
-              anon_manifest_code=$(curl -s -o /dev/null -w '%{http_code}' \
+              curl -s -o /dev/null -w '%{http_code}' \
                 -H "Authorization: Bearer ${anon_tok}" \
-                -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
-                "https://ghcr.io/v2/${OWNER_LC}/${pkg}/manifests/${digest}")
-              if [ "${anon_manifest_code}" = "200" ]; then
-                echo "ERROR: ${pkg} manifest returned 200 with anonymous pull token (package is public, expected private!)" >&2
-                exit 1
-              fi
+                -H "Accept: ${accept_hdr}" \
+                "https://ghcr.io/v2/${OWNER_LC}/${pkg}/manifests/${digest}"
+              return
             fi
-            echo "${anon_manifest_code}"
+            echo "${unauth_code}"
           }
 
-          API_ANON_HTTP=$(check_private_package "qa-evidence-hub-api" "${API_DIGEST}")
-          WEB_ANON_HTTP=$(check_private_package "qa-evidence-hub-web" "${WEB_DIGEST}")
+          API_ANON_HTTP=$(probe_anonymous_pull "qa-evidence-hub-api" "${API_DIGEST}")
+          WEB_ANON_HTTP=$(probe_anonymous_pull "qa-evidence-hub-web" "${WEB_DIGEST}")
 
-          echo "Verified private GHCR visibility (anonymous pull denied: api=${API_ANON_HTTP}, web=${WEB_ANON_HTTP})"
+          echo "Observed GHCR anonymous manifest pull HTTP status: api=${API_ANON_HTTP}, web=${WEB_ANON_HTTP}"
           {
             echo "api_anon_http=${API_ANON_HTTP}"
             echo "web_anon_http=${WEB_ANON_HTTP}"
@@ -282,6 +279,10 @@ jobs:
           node -e '
             const fs = require("node:fs");
             const extraTag = process.env.EXTRA_TAG;
+            const apiAnon = Number(process.env.API_ANON_HTTP);
+            const webAnon = Number(process.env.WEB_ANON_HTTP);
+            const apiVis = apiAnon === 200 ? "public" : "private";
+            const webVis = webAnon === 200 ? "public" : "private";
             const apiTags = [process.env.API_SHA_TAG, ...(extraTag ? [`${process.env.API_REPO}:${extraTag}`] : [])];
             const webTags = [process.env.WEB_SHA_TAG, ...(extraTag ? [`${process.env.WEB_REPO}:${extraTag}`] : [])];
             const provenance = {
@@ -305,8 +306,8 @@ jobs:
               images: {
                 api: {
                   package: process.env.API_REPO,
-                  visibility: "private",
-                  anonymousPullHttpStatus: Number(process.env.API_ANON_HTTP),
+                  visibility: apiVis,
+                  anonymousPullHttpStatus: apiAnon,
                   tags: apiTags,
                   localImageId: process.env.API_LOCAL_ID,
                   registryManifestDigest: process.env.API_DIGEST,
@@ -320,8 +321,8 @@ jobs:
                 },
                 web: {
                   package: process.env.WEB_REPO,
-                  visibility: "private",
-                  anonymousPullHttpStatus: Number(process.env.WEB_ANON_HTTP),
+                  visibility: webVis,
+                  anonymousPullHttpStatus: webAnon,
                   tags: webTags,
                   localImageId: process.env.WEB_LOCAL_ID,
                   registryManifestDigest: process.env.WEB_DIGEST,
@@ -342,10 +343,10 @@ jobs:
               `- **Trusted Ref:** \`${provenance.trustedRef}\``,
               `- **Passing Test & Smoke Run:** [${provenance.passingVerificationRun.runId}](${provenance.passingVerificationRun.runUrl})`,
               "",
-              "| Component | Immutable GHCR Manifest Ref | Visibility (Anon Pull HTTP) | SPDX SBOM Artifact (`SHA-256`) |",
+              "| Component | Immutable GHCR Manifest Ref | Observed Visibility (Anon Pull HTTP) | SPDX SBOM Artifact (`SHA-256`) |",
               "| :--- | :--- | :--- | :--- |",
-              `| \`api\` | \`${provenance.images.api.immutablePullRef}\` | \`private\` (\`${provenance.images.api.anonymousPullHttpStatus}\`) | \`qa-evidence-hub-api.spdx.json\` (\`${provenance.images.api.sbom.sha256}\`, ${provenance.images.api.sbom.packageCount} pkgs) |`,
-              `| \`web\` | \`${provenance.images.web.immutablePullRef}\` | \`private\` (\`${provenance.images.web.anonymousPullHttpStatus}\`) | \`qa-evidence-hub-web.spdx.json\` (\`${provenance.images.web.sbom.sha256}\`, ${provenance.images.web.sbom.packageCount} pkgs) |`,
+              `| \`api\` | \`${provenance.images.api.immutablePullRef}\` | \`${apiVis}\` (\`${apiAnon}\`) | \`qa-evidence-hub-api.spdx.json\` (\`${provenance.images.api.sbom.sha256}\`, ${provenance.images.api.sbom.packageCount} pkgs) |`,
+              `| \`web\` | \`${provenance.images.web.immutablePullRef}\` | \`${webVis}\` (\`${webAnon}\`) | \`qa-evidence-hub-web.spdx.json\` (\`${provenance.images.web.sbom.sha256}\`, ${provenance.images.web.sbom.packageCount} pkgs) |`,
               ""
             ].join("\n");
             fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
@@ -363,3 +364,15 @@ jobs:
             release-artifacts/sha256sums.txt
           if-no-files-found: error
           retention-days: 90
+
+      - name: Enforce private GHCR package visibility (fail if public)
+        env:
+          API_ANON_HTTP: ${{ steps.visibility.outputs.api_anon_http }}
+          WEB_ANON_HTTP: ${{ steps.visibility.outputs.web_anon_http }}
+        run: |
+          if [ "${API_ANON_HTTP}" = "200" ] || [ "${WEB_ANON_HTTP}" = "200" ]; then
+            echo "ERROR: GHCR package visibility check FAILED (api=${API_ANON_HTTP}, web=${WEB_ANON_HTTP}). Expected private GHCR packages denying anonymous OCI manifest pulls." >&2
+            echo "Action required in GitHub Package Settings UI: switch visibility to Private (or delete & seed private via CLI PAT) and grant KontentWave/qa-evidence-hub Write under Manage Actions access." >&2
+            exit 1
+          fi
+          echo "GHCR private package visibility verified (api=${API_ANON_HTTP}, web=${WEB_ANON_HTTP})."
