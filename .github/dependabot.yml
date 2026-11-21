@@ -10,6 +10,12 @@ updates:
     open-pull-requests-limit: 10
     commit-message:
       prefix: "chore(deps)"
+    ignore:
+      # Keep @types/node aligned with Node.js 24 LTS runtime and TypeScript on 5.x during Phase 1 (project_sheet.md §6.1).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -32,6 +38,10 @@ updates:
     open-pull-requests-limit: 3
     commit-message:
       prefix: "chore(docker)"
+    ignore:
+      # Keep container base images on Node.js 24 LTS while receiving 24.x patch/digest updates.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "docker"
     directory: "/apps/web"
@@ -43,6 +53,10 @@ updates:
     open-pull-requests-limit: 3
     commit-message:
       prefix: "chore(docker)"
+    ignore:
+      # Keep container base images on Node.js 24 LTS while receiving 24.x patch/digest updates.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "docker-compose"
     directory: "/"
