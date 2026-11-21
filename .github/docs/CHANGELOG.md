@@ -4,6 +4,21 @@ All notable changes to QA Evidence Hub are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0 versions (`0.x.y`) reflect active Phase 1 development on synthetic data only; real client data remains unauthorized until `F03`–`F04` and the section 8 production audit verdict pass in `P1-13`.
 
+## [0.3.0] - 2026-11-21
+
+### Added (`P1-03` — Single-owner authentication, session boundary, and CSRF protection)
+
+- Added Prisma models and SQL migration (`20261121000000_owner_and_auth_sessions`) for `owners` (PostgreSQL `singleton_key` unique constraint enforcing a single owner even under concurrent provisioning) and `auth_sessions` (storing SHA-256 `token_digest` values, per-session CSRF salts, expiry timestamps, and revocation metadata).
+- Added operator-only provisioning and password-reset CLI (`scripts/provision-owner.ts`, bundled at `/app/scripts/provision-owner.ts` in `apps/api/Dockerfile` and tested in `scripts/provision-owner.test.mjs` + `apps/api/test/auth-api.integration.spec.ts`) using salted adaptive `scrypt`, hidden TTY or `--password-stdin` input, CLI `--password` rejection, atomic session revocation on password reset, and zero-secret output.
+- Implemented `apps/api/src/auth/` (`PasswordHasherService`, `CsrfService`, `LoginThrottlerService`, `AuthService`, `AuthAndCsrfGuard`, `AuthController`) with default-deny `APP_GUARD` authorization, generic `401` login failures, bounded per-IP login throttling (`429` + `Retry-After`) and bounded hashing queue, host-only `HttpOnly; Secure; SameSite=Lax; Path=/` cookies, browser-bound pre-login and session-bound post-login `X-CSRF-Token` + exact `Origin` checks before multipart processing, read-only `GET /api/v1/auth/session` (`private, no-store, no-transform`, zero `Set-Cookie`), and regenerated `@qa-evidence-hub/api-client` OpenAPI types.
+- Built accessible Next.js `/login` and protected `/` UI (`apps/web/app/login/page.tsx`, `apps/web/src/components/login-form.tsx`, `apps/web/src/components/logout-button.tsx`, `apps/web/src/lib/api.ts`) with explicit labels, keyboard navigation, visible error-summary focus on validation/`401` failures, direct `/api/v1/auth/*` browser mutations, and read-only `qaeh_session`-only SSR forwarding.
+- Added `apps/api/test/auth-api.integration.spec.ts`, `@P1-03` Cucumber BDD steps (`specs/features/private-access.feature`, `apps/api/bdd/private-access.steps.ts`, `pnpm test:bdd:auth`), adapted `scripts/f01-containers.test.mjs` (including test-only HTTPS `Secure` cookie and HTTP-downgrade proof through Nginx) and `e2e/foundation-smoke.spec.ts`, and wired auth BDD + `>= 80%` `auth/` service coverage into `.github/workflows/ci.yml` and `.github/workflows/release.yml`.
+
+### Security & Changed (`P1-03`)
+
+- Tightened `TRUST_PROXY` validation and Express proxy resolution (`apps/api/src/config/env.validation.ts`, `apps/api/src/config/trusted-proxy.ts`, `compose.yaml`) to trust forwarded headers **only** from the configured single-hop Nginx ingress (`false`, `loopback`, explicit IP/CIDR, or `nginx` service hostname), rejecting numeric hop counts and broad `uniquelocal`/`linklocal` ranges so sibling internal containers (`web`) cannot spoof `X-Forwarded-*` headers.
+- Enforced exact `APP_ORIGIN` configuration in production (requiring `https://` for non-loopback production origins) and rejected non-HTTPS requests at `AuthAndCsrfGuard` whenever an `https://` origin is configured.
+
 ## [0.2.1] - 2026-11-21
 
 ### Security & Fixed (`P1-02` `F02` Review Hardening)

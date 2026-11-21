@@ -32,6 +32,7 @@ playwright-report
 test-results
 .security-reports
 **/dist-bdd
-scripts
+scripts/*
+!scripts/provision-owner.ts
 compose*.yaml
 infra

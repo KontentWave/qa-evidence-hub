@@ -40,7 +40,8 @@ describe('HealthController', () => {
       validateApiEnv({
         NODE_ENV: 'production',
         DATABASE_URL: 'postgresql://qaeh:synthetic@localhost:5432/qaeh',
-        TRUST_PROXY: '1',
+        TRUST_PROXY: 'nginx',
+        APP_ORIGIN: 'https://hub.synthetic.invalid',
       }),
     );
     await nestApp.init();

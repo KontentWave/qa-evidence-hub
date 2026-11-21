@@ -11,7 +11,22 @@ describe('HomePage (apps/web/app/page.tsx)', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders a single <h1> inside a <main> landmark and explicit Ready text when API is ready', async () => {
+  it('redirects anonymous visitors on / to /login before rendering any readiness or workspace content', async () => {
+    vi.spyOn(apiModule, 'requireAuthenticatedOwner').mockImplementation(async () => {
+      throw new Error('NEXT_REDIRECT:/login');
+    });
+    const readinessSpy = vi.spyOn(apiModule, 'fetchPlatformReadiness');
+
+    await expect(HomePage()).rejects.toThrow('NEXT_REDIRECT:/login');
+    expect(readinessSpy).not.toHaveBeenCalled();
+  });
+
+  it('renders a single <h1> inside a <main> landmark, owner identity, sign-out control, and Ready text when signed in', async () => {
+    vi.spyOn(apiModule, 'requireAuthenticatedOwner').mockResolvedValue({
+      id: '11111111-2222-4333-8444-555555555555',
+      loginIdentifier: 'owner@synthetic.invalid',
+      timezone: 'Europe/Bratislava',
+    });
     vi.spyOn(apiModule, 'fetchPlatformReadiness').mockResolvedValue({
       state: 'ready',
       label: 'Ready',
@@ -28,12 +43,20 @@ describe('HomePage (apps/web/app/page.tsx)', () => {
     expect(headings).toHaveLength(1);
     expect(headings[0]?.textContent).toContain('QA Evidence Hub');
 
+    expect(screen.getByText(/owner@synthetic\.invalid/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Sign out/i })).toBeTruthy();
+
     const statusRegion = screen.getByRole('status');
     expect(statusRegion.textContent).toContain('System status: Ready');
     expect(statusRegion.textContent).toContain('API and PostgreSQL readiness check succeeded.');
   });
 
   it('renders graceful degraded text when API returns 503 not_ready without exposing internal hosts', async () => {
+    vi.spyOn(apiModule, 'requireAuthenticatedOwner').mockResolvedValue({
+      id: '11111111-2222-4333-8444-555555555555',
+      loginIdentifier: 'owner@synthetic.invalid',
+      timezone: 'Europe/Bratislava',
+    });
     vi.spyOn(apiModule, 'fetchPlatformReadiness').mockResolvedValue({
       state: 'not_ready',
       label: 'Not ready (degraded)',
@@ -69,8 +92,11 @@ describe('HomePage (apps/web/app/page.tsx)', () => {
 
     const sourceFiles = [
       path.join(webRoot, 'src/lib/api.ts'),
+      path.join(webRoot, 'src/components/login-form.tsx'),
+      path.join(webRoot, 'src/components/logout-button.tsx'),
       path.join(webRoot, 'app/layout.tsx'),
       path.join(webRoot, 'app/page.tsx'),
+      path.join(webRoot, 'app/login/page.tsx'),
     ];
 
     for (const filePath of sourceFiles) {
@@ -114,6 +140,44 @@ describe('HomePage (apps/web/app/page.tsx)', () => {
       const errorResult = await apiModule.fetchPlatformReadiness(brokenFetch);
       expect(errorResult.state).toBe('not_ready');
       expect(errorResult.detail).not.toContain('api.internal');
+
+      // Verify fetchCurrentOwnerSession forwards ONLY qaeh_session cookie with cache: no-store
+      let forwardedHeaders: HeadersInit | undefined;
+      let forwardedCache: RequestCache | undefined;
+      const sessionFetch: typeof globalThis.fetch = async (input, init) => {
+        const req = input instanceof Request ? input : undefined;
+        forwardedCache = init?.cache ?? req?.cache;
+        forwardedHeaders = init?.headers ?? (req ? Object.fromEntries(req.headers.entries()) : undefined);
+        return new Response(
+          JSON.stringify({
+            authenticated: true,
+            owner: {
+              id: '11111111-2222-4333-8444-555555555555',
+              loginIdentifier: 'owner@synthetic.invalid',
+              timezone: 'Europe/Bratislava',
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      };
+
+      const validToken = 'a'.repeat(43);
+      const owner = await apiModule.fetchCurrentOwnerSession(validToken, sessionFetch);
+      expect(owner?.loginIdentifier).toBe('owner@synthetic.invalid');
+      expect(forwardedCache).toBe('no-store');
+      const hdrMap = new Headers(forwardedHeaders);
+      expect(hdrMap.get('cookie')).toBe(`qaeh_session=${validToken}`);
+      expect(hdrMap.get('x-forwarded-for')).toBeNull();
+      expect(hdrMap.get('x-forwarded-proto')).toBeNull();
+
+      // Malformed/short token is rejected without calling upstream fetch.
+      let calledOnMalformed = false;
+      const malformedOwner = await apiModule.fetchCurrentOwnerSession('bad;cookie=inject', async () => {
+        calledOnMalformed = true;
+        return new Response(null, { status: 401 });
+      });
+      expect(malformedOwner).toBeNull();
+      expect(calledOnMalformed).toBe(false);
     } finally {
       if (originalEnv === undefined) {
         delete process.env.INTERNAL_API_BASE_URL;

@@ -38,6 +38,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/csrf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Bootstrap browser-bound pre-login or session-bound anti-CSRF token */
+        get: operations["getAuthCsrfToken"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Authenticate the provisioned single owner and issue a fresh session cookie */
+        post: operations["loginOwner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read-only authenticated owner session lookup (emits zero Set-Cookie headers) */
+        get: operations["getAuthSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Invalidate the current owner session and clear browser auth cookies */
+        post: operations["logoutOwner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -62,6 +130,50 @@ export interface components {
              * @enum {string}
              */
             status: "not_ready";
+        };
+        CsrfTokenResponseDto: {
+            /** @example dG9rZW4tZXhhbXBsZS1vcGFxdWUtY3NyZg */
+            csrfToken: string;
+        };
+        LoginRequestDto: {
+            /** @example owner@example.test */
+            loginIdentifier: string;
+            /** @example •••••••••••• */
+            password: string;
+        };
+        OwnerSummaryDto: {
+            /** @example 11111111-2222-4333-8444-555555555555 */
+            id: string;
+            /** @example owner@example.test */
+            loginIdentifier: string;
+            /** @example Europe/Bratislava */
+            timezone: string;
+        };
+        LoginResponseDto: {
+            /**
+             * @example true
+             * @enum {boolean}
+             */
+            authenticated: true;
+            owner: components["schemas"]["OwnerSummaryDto"];
+            /** @example Y2hhbmdlZC1hdXRoZW50aWNhdGVkLWNzcmYtdG9rZW4 */
+            csrfToken: string;
+        };
+        SessionStatusResponseDto: {
+            /**
+             * @example true
+             * @enum {boolean}
+             */
+            authenticated: true;
+            owner: components["schemas"]["OwnerSummaryDto"];
+        };
+        EmptyBodyDto: Record<string, never>;
+        LogoutResponseDto: {
+            /**
+             * @example false
+             * @enum {boolean}
+             */
+            authenticated: false;
         };
     };
     responses: never;
@@ -118,6 +230,156 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ReadinessUnavailableResponseDto"];
                 };
+            };
+        };
+    };
+    getAuthCsrfToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Browser-bound anti-CSRF token */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CsrfTokenResponseDto"];
+                };
+            };
+            /** @description Insecure transport rejected when HTTPS origin is configured */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    loginOwner: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Browser-bound anti-CSRF token obtained from GET /api/v1/auth/csrf */
+                "X-CSRF-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequestDto"];
+            };
+        };
+        responses: {
+            /** @description Owner authenticated; fresh session cookie and authenticated CSRF token issued */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResponseDto"];
+                };
+            };
+            /** @description Invalid login payload or undeclared DTO fields */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Generic authentication failure */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid Origin or X-CSRF-Token */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bounded login rate limit exceeded */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getAuthSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Active authenticated owner session summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionStatusResponseDto"];
+                };
+            };
+            /** @description Missing, expired, or revoked session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    logoutOwner: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Session-bound anti-CSRF token */
+                "X-CSRF-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmptyBodyDto"];
+            };
+        };
+        responses: {
+            /** @description Session invalidated and cookie cleared */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogoutResponseDto"];
+                };
+            };
+            /** @description Authentication is required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid Origin or X-CSRF-Token */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

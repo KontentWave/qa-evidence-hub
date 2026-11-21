@@ -1,14 +1,31 @@
-import { fetchPlatformReadiness } from '../src/lib/api';
+import { LogoutButton } from '../src/components/logout-button';
+import { fetchPlatformReadiness, requireAuthenticatedOwner } from '../src/lib/api';
 
 export const dynamic = 'force-dynamic';
 
 export default async function HomePage() {
+  const owner = await requireAuthenticatedOwner();
   const readiness = await fetchPlatformReadiness();
   const isReady = readiness.state === 'ready';
 
   return (
     <main id="main-content" tabIndex={-1}>
-      <h1>QA Evidence Hub</h1>
+      <div className="workspace-topbar">
+        <div>
+          <h1>QA Evidence Hub</h1>
+          <p className="owner-meta">
+            Signed in as <strong>{owner.loginIdentifier}</strong> · Timezone{' '}
+            <span>{owner.timezone}</span>
+          </p>
+        </div>
+        <LogoutButton />
+      </div>
+
+      <nav aria-label="Workspace sections" className="section-nav workspace-section-nav no-print">
+        <a href="#system-readiness">System readiness</a>
+        <a href="#workspace-scope">Access boundary</a>
+      </nav>
+
       <p className="lead">
         Structured workspace for engagement evidence capture, finding lifecycle tracking, and
         printable project reports.
@@ -29,19 +46,19 @@ export default async function HomePage() {
       </section>
 
       <section aria-labelledby="scope-heading" className="card" id="workspace-scope">
-        <h2 id="scope-heading">Foundation boundary</h2>
+        <h2 id="scope-heading">Private access boundary</h2>
         <ul className="scope-list">
           <li>
-            Single-origin HTTP routing via Nginx to standalone Next.js presentation and private
-            NestJS API services.
+            Single-origin routing via Nginx to standalone Next.js presentation and private NestJS
+            API services.
           </li>
           <li>
-            Server-rendered pages query the internal API with <code>no-store</code> semantics and
-            hold zero database or object-storage credentials.
+            Server-rendered pages forward only the requesting browser&apos;s session cookie to the
+            internal API with read-only <code>private, no-store</code> semantics.
           </li>
           <li>
-            Authentication, domain entities, and private evidence storage arrive in subsequent Phase
-            1 slices after CI gates (F01–F02) complete.
+            Browser mutations call <code>/api/v1/auth/*</code> directly with exact{' '}
+            <code>Origin</code> and session-bound <code>X-CSRF-Token</code> checks.
           </li>
         </ul>
       </section>

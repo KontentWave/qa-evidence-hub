@@ -41,7 +41,8 @@ Given(
       DATABASE_POOL_MAX: '5',
       POSTGRES_MAX_CONNECTIONS: '30',
       DATABASE_STATEMENT_TIMEOUT_MS: '5000',
-      TRUST_PROXY: '1',
+      TRUST_PROXY: '127.0.0.1/32,::1/128',
+      APP_ORIGIN: 'http://127.0.0.1:8080',
     });
 
     const moduleRef = await Test.createTestingModule({

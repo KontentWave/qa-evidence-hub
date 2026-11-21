@@ -7,6 +7,10 @@ import {
   RequestValidationException,
 } from './common/http-exception.filter';
 import type { ApiEnv } from './config/env.validation';
+import {
+  createConfiguredProxyTrust,
+  TRUSTED_PROXY_CHECKER_KEY,
+} from './config/trusted-proxy';
 
 export interface ConfigureAppOptions {
   readonly mountSwaggerUi?: boolean;
@@ -60,7 +64,12 @@ export function configureApp(
   options?: ConfigureAppOptions,
 ): void {
   app.disable('x-powered-by');
-  app.set('trust proxy', env.trustProxy);
+  const proxyTrust = createConfiguredProxyTrust(env.trustProxy);
+  app.set('trust proxy', proxyTrust.expressSetting);
+  app.set(TRUSTED_PROXY_CHECKER_KEY, proxyTrust.isTrustedPeer);
+  if (proxyTrust.middleware) {
+    app.use(proxyTrust.middleware);
+  }
   app.setGlobalPrefix('api/v1');
 
   app.useGlobalPipes(
