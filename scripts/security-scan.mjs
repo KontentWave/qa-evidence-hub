@@ -236,9 +236,180 @@ export async function runDependencyVulnerabilityGate({
   }
 }
 
+function validateContainerExceptionEntry(exc, index, nowIsoDate) {
+  const errs = [];
+  const requiredStrings = [
+    'imageRole',
+    'kind',
+    'target',
+    'reviewedAt',
+    'reviewedBy',
+    'expiresOn',
+    'docRef',
+    'rationale',
+  ];
+  for (const field of requiredStrings) {
+    if (typeof exc?.[field] !== 'string' || exc[field].trim().length === 0) {
+      errs.push(`container-scan-exceptions[${index}]: missing required string "${field}"`);
+    }
+  }
+  if (exc?.docRef && !exc.docRef.startsWith('.github/docs/runbook.md')) {
+    errs.push(`container-scan-exceptions[${index}]: docRef must reference .github/docs/runbook.md`);
+  }
+  if (exc?.expiresOn && exc.expiresOn < nowIsoDate) {
+    errs.push(
+      `container-scan-exceptions[${index}] (${exc.imageRole} ${exc.target}): expired on ${exc.expiresOn}`,
+    );
+  }
+  if (exc?.reviewedAt && exc?.expiresOn) {
+    const revMs = Date.parse(`${exc.reviewedAt}T00:00:00Z`);
+    const expMs = Date.parse(`${exc.expiresOn}T00:00:00Z`);
+    const maxHorizonMs = 95 * 24 * 60 * 60 * 1000;
+    if (!Number.isFinite(revMs) || !Number.isFinite(expMs) || expMs - revMs > maxHorizonMs) {
+      errs.push(
+        `container-scan-exceptions[${index}]: review window (${exc.reviewedAt} -> ${exc.expiresOn}) exceeds 95-day maximum`,
+      );
+    }
+  }
+  if (exc?.kind === 'vulnerability') {
+    if (typeof exc.pkgName !== 'string' || !exc.pkgName) {
+      errs.push(`container-scan-exceptions[${index}]: vulnerability exception requires pkgName`);
+    }
+    if (typeof exc.installedVersion !== 'string' || !exc.installedVersion) {
+      errs.push(
+        `container-scan-exceptions[${index}]: vulnerability exception requires installedVersion`,
+      );
+    }
+    if (!Array.isArray(exc.vulnerabilityIds) || exc.vulnerabilityIds.length === 0) {
+      errs.push(
+        `container-scan-exceptions[${index}]: vulnerability exception requires non-empty vulnerabilityIds[]`,
+      );
+    }
+  } else if (exc?.kind === 'secret') {
+    if (typeof exc.ruleId !== 'string' || !exc.ruleId) {
+      errs.push(`container-scan-exceptions[${index}]: secret exception requires ruleId`);
+    }
+  } else {
+    errs.push(`container-scan-exceptions[${index}]: unsupported kind "${exc?.kind ?? ''}"`);
+  }
+  return errs;
+}
+
+export function evaluateContainerTrivyReports({
+  imageRole,
+  libSecretReport,
+  osReport,
+  exceptionsConfig,
+  nowIsoDate = new Date().toISOString().slice(0, 10),
+}) {
+  const errors = [];
+  if (!libSecretReport || typeof libSecretReport.SchemaVersion !== 'number') {
+    return {
+      ok: false,
+      matchedExceptions: [],
+      errors: [`[${imageRole}] invalid or missing Trivy library+secret JSON report`],
+    };
+  }
+  if (!osReport || typeof osReport.SchemaVersion !== 'number') {
+    return {
+      ok: false,
+      matchedExceptions: [],
+      errors: [`[${imageRole}] invalid or missing Trivy OS JSON report`],
+    };
+  }
+
+  const exceptions = Array.isArray(exceptionsConfig?.exceptions)
+    ? exceptionsConfig.exceptions
+    : [];
+  exceptions.forEach((exc, idx) => {
+    errors.push(...validateContainerExceptionEntry(exc, idx, nowIsoDate));
+  });
+  if (errors.length > 0) {
+    return { ok: false, matchedExceptions: [], errors };
+  }
+
+  const matchedExceptions = [];
+
+  function checkReportVulnerabilities(report, sourceLabel) {
+    for (const res of report.Results ?? []) {
+      const target = res?.Target ?? '<unknown-target>';
+      for (const vuln of res?.Vulnerabilities ?? []) {
+        const vulnId = vuln?.VulnerabilityID ?? '<unknown-id>';
+        const pkgName = vuln?.PkgName ?? '<unknown-pkg>';
+        const installedVersion = vuln?.InstalledVersion ?? '<unknown-ver>';
+        const severity = vuln?.Severity ?? 'UNKNOWN';
+
+        const matched = exceptions.find(
+          (exc) =>
+            exc.kind === 'vulnerability' &&
+            exc.imageRole === imageRole &&
+            exc.target === target &&
+            exc.pkgName === pkgName &&
+            exc.installedVersion === installedVersion &&
+            exc.vulnerabilityIds.includes(vulnId),
+        );
+
+        if (matched) {
+          matchedExceptions.push({
+            imageRole,
+            kind: 'vulnerability',
+            target,
+            id: vulnId,
+            pkg: `${pkgName}@${installedVersion}`,
+          });
+        } else {
+          errors.push(
+            `[${imageRole}] Unreviewed ${severity} ${sourceLabel} vulnerability ${vulnId} in ${target} (${pkgName}@${installedVersion}, fixed: ${vuln?.FixedVersion || 'unfixed'})`,
+          );
+        }
+      }
+    }
+  }
+
+  checkReportVulnerabilities(libSecretReport, 'library');
+  checkReportVulnerabilities(osReport, 'os');
+
+  for (const res of libSecretReport.Results ?? []) {
+    const target = res?.Target ?? '<unknown-target>';
+    for (const secret of res?.Secrets ?? []) {
+      const ruleId = secret?.RuleID ?? '<unknown-rule>';
+      const severity = secret?.Severity ?? 'HIGH';
+      const matched = exceptions.find(
+        (exc) =>
+          exc.kind === 'secret' &&
+          exc.imageRole === imageRole &&
+          exc.target === target &&
+          exc.ruleId === ruleId,
+      );
+      if (matched) {
+        matchedExceptions.push({
+          imageRole,
+          kind: 'secret',
+          target,
+          id: ruleId,
+        });
+      } else {
+        // Never include secret.Match in error output.
+        errors.push(
+          `[${imageRole}] Unreviewed ${severity} embedded secret (${ruleId}: ${secret?.Title ?? 'secret'}) at ${target}:${secret?.StartLine ?? 0}`,
+        );
+      }
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    matchedExceptions,
+    errors,
+  };
+}
+
 export async function scanOciImageTarWithTrivy(
   tarPath,
-  { checkAllLibrary = true, checkFixableOs = true } = {},
+  {
+    imageRole = 'unclassified',
+    exceptionsConfig = { exceptions: [] },
+  } = {},
 ) {
   const trivyCache = getTrivyCacheDir();
   await fs.mkdir(trivyCache, { recursive: true });
@@ -246,66 +417,81 @@ export async function scanOciImageTarWithTrivy(
   const workDir = path.dirname(absTar);
   const tarName = path.basename(absTar);
 
-  if (checkAllLibrary) {
-    await execFileAsync(
-      'docker',
-      [
-        'run',
-        '--rm',
-        '-v',
-        `${workDir}:/scan:ro`,
-        '-v',
-        `${trivyCache}:/root/.cache`,
-        TRIVY_IMAGE,
-        'image',
-        '--input',
-        `/scan/${tarName}`,
-        '--scanners',
-        'vuln,secret',
-        '--pkg-types',
-        'library',
-        '--severity',
-        'HIGH,CRITICAL',
-        '--exit-code',
-        '1',
-      ],
-      { maxBuffer: 20 * 1024 * 1024 },
+  const libSecretOut = await execFileAsync(
+    'docker',
+    [
+      'run',
+      '--rm',
+      '-v',
+      `${workDir}:/scan:ro`,
+      '-v',
+      `${trivyCache}:/root/.cache`,
+      TRIVY_IMAGE,
+      'image',
+      '--input',
+      `/scan/${tarName}`,
+      '--scanners',
+      'vuln,secret',
+      '--pkg-types',
+      'library',
+      '--severity',
+      'HIGH,CRITICAL',
+      '--format',
+      'json',
+    ],
+    { maxBuffer: 50 * 1024 * 1024 },
+  );
+
+  const osOut = await execFileAsync(
+    'docker',
+    [
+      'run',
+      '--rm',
+      '-v',
+      `${workDir}:/scan:ro`,
+      '-v',
+      `${trivyCache}:/root/.cache`,
+      TRIVY_IMAGE,
+      'image',
+      '--input',
+      `/scan/${tarName}`,
+      '--scanners',
+      'vuln',
+      '--pkg-types',
+      'os',
+      '--severity',
+      'HIGH,CRITICAL',
+      '--ignore-unfixed',
+      '--format',
+      'json',
+    ],
+    { maxBuffer: 50 * 1024 * 1024 },
+  );
+
+  const libSecretReport = JSON.parse(libSecretOut.stdout);
+  const osReport = JSON.parse(osOut.stdout);
+  const evalRes = evaluateContainerTrivyReports({
+    imageRole,
+    libSecretReport,
+    osReport,
+    exceptionsConfig,
+  });
+
+  if (!evalRes.ok) {
+    throw new Error(
+      `Container security gate FAILED for "${imageRole}":\n - ${evalRes.errors.join('\n - ')}`,
     );
   }
 
-  if (checkFixableOs) {
-    await execFileAsync(
-      'docker',
-      [
-        'run',
-        '--rm',
-        '-v',
-        `${workDir}:/scan:ro`,
-        '-v',
-        `${trivyCache}:/root/.cache`,
-        TRIVY_IMAGE,
-        'image',
-        '--input',
-        `/scan/${tarName}`,
-        '--scanners',
-        'vuln',
-        '--pkg-types',
-        'os',
-        '--severity',
-        'HIGH,CRITICAL',
-        '--ignore-unfixed',
-        '--exit-code',
-        '1',
-      ],
-      { maxBuffer: 20 * 1024 * 1024 },
-    );
-  }
+  return evalRes;
 }
 
 export async function runContainerVulnerabilityGate({
   prebuiltApiImage = process.env.PREBUILT_API_IMAGE ?? '',
   prebuiltWebImage = process.env.PREBUILT_WEB_IMAGE ?? '',
+  exceptionsPath = path.join(scriptDir, 'container-scan-exceptions.json'),
 } = {}) {
+  const exceptionsConfig = JSON.parse(await fs.readFile(exceptionsPath, 'utf8'));
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'qaeh-trivy-img-'));
   const runId = Date.now().toString(36);
   const usingPrebuilt = Boolean(prebuiltApiImage && prebuiltWebImage);
@@ -353,11 +539,11 @@ export async function runContainerVulnerabilityGate({
     await execFileAsync('docker', ['save', '-o', postgresTar, postgresRef]);
 
     // Sequential Trivy invocations prevent local cache DB lock contention.
-    await scanOciImageTarWithTrivy(apiTar, { checkAllLibrary: true, checkFixableOs: true });
-    await scanOciImageTarWithTrivy(webTar, { checkAllLibrary: true, checkFixableOs: true });
-    await scanOciImageTarWithTrivy(nginxTar, { checkAllLibrary: true, checkFixableOs: true });
-    // Postgres base OS packages checked for fixable HIGH/CRITICAL; upstream gosu Go stdlib noted in runbook.md.
-    await scanOciImageTarWithTrivy(postgresTar, { checkAllLibrary: false, checkFixableOs: true });
+    // Every image (including postgres) runs full library + embedded-secret + fixable-OS scans.
+    await scanOciImageTarWithTrivy(apiTar, { imageRole: 'api', exceptionsConfig });
+    await scanOciImageTarWithTrivy(webTar, { imageRole: 'web', exceptionsConfig });
+    await scanOciImageTarWithTrivy(nginxTar, { imageRole: 'nginx', exceptionsConfig });
+    await scanOciImageTarWithTrivy(postgresTar, { imageRole: 'postgres', exceptionsConfig });
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
     if (!usingPrebuilt) {
@@ -464,7 +650,7 @@ async function main() {
 
   if (command === 'scan-image-tar') {
     assert.ok(rest[0], 'Usage: node scripts/security-scan.mjs scan-image-tar <tarPath>');
-    await scanOciImageTarWithTrivy(rest[0], { checkAllLibrary: true, checkFixableOs: true });
+    await scanOciImageTarWithTrivy(rest[0]);
     process.stdout.write('Container tarball scan PASSED.\n');
     return;
   }
