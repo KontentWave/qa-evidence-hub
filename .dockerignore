@@ -25,6 +25,13 @@ node_modules
 
 # Non-container specs, test suites, and operational scripts
 specs
+e2e
+playwright.config.ts
+tsconfig.e2e.json
+playwright-report
+test-results
+.security-reports
+**/dist-bdd
 scripts
 compose*.yaml
 infra

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist-bdd",
+    "declaration": false,
+    "incremental": false,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts", "bdd/**/*.ts"],
+  "exclude": ["node_modules", "dist", "dist-bdd", "src/**/*.spec.ts", "test/**/*.ts"]
+}

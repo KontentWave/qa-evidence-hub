@@ -1,0 +1,379 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-and-test:
+    name: Pre-Release Quality, Integration, BDD & Security Gates
+    if: >-
+      github.repository == 'KontentWave/qa-evidence-hub' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout full repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Enable pinned pnpm via Corepack
+        run: corepack enable pnpm
+
+      - name: Setup Node.js 24 LTS with pnpm cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install locked workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run quality, contract, coverage, integration, BDD, secret, static, dependency, and license gates
+        run: |
+          pnpm verify:digests
+          pnpm verify:workflows
+          pnpm format:check
+          pnpm lint
+          pnpm typecheck
+          pnpm openapi:check
+          pnpm test
+          pnpm test:coverage
+          pnpm build
+          pnpm test:integration
+          pnpm test:bdd:foundation
+          pnpm verify:security:secrets
+          pnpm verify:security:static
+          pnpm verify:security:deps
+          pnpm verify:licenses
+
+  build-scan-smoke-publish:
+    name: Build Once, Scan, Smoke-Test, SBOM & Publish Private GHCR
+    needs:
+      - verify-and-test
+    if: >-
+      github.repository == 'KontentWave/qa-evidence-hub' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Verify authorized trusted ref
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] || [ "${GITHUB_EVENT_NAME}" = "pull_request_target" ]; then
+            echo "Release workflow must never execute on pull_request events" >&2
+            exit 1
+          fi
+          if ! printf '%s' "${GITHUB_REF}" | grep -Eq '^refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$'; then
+            echo "Unauthorized or malformed ref for image publishing: ${GITHUB_REF}" >&2
+            exit 1
+          fi
+          echo "Authorized trusted ref verified: ${GITHUB_REF} (${GITHUB_SHA})"
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Enable pinned pnpm via Corepack
+        run: corepack enable pnpm
+
+      - name: Setup Node.js 24 LTS with pnpm cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install locked workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright headless Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build API and Web production images ONCE
+        id: build_once
+        run: |
+          OWNER_LC=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-12)
+          API_REPO="ghcr.io/${OWNER_LC}/qa-evidence-hub-api"
+          WEB_REPO="ghcr.io/${OWNER_LC}/qa-evidence-hub-web"
+          API_SHA_TAG="${API_REPO}:sha-${SHORT_SHA}"
+          WEB_SHA_TAG="${WEB_REPO}:sha-${SHORT_SHA}"
+
+          docker build --target runner -f apps/api/Dockerfile -t "${API_SHA_TAG}" .
+          docker build --target runner -f apps/web/Dockerfile -t "${WEB_SHA_TAG}" .
+
+          API_LOCAL_ID=$(docker image inspect "${API_SHA_TAG}" --format '{{.Id}}')
+          WEB_LOCAL_ID=$(docker image inspect "${WEB_SHA_TAG}" --format '{{.Id}}')
+
+          {
+            echo "owner_lc=${OWNER_LC}"
+            echo "short_sha=${SHORT_SHA}"
+            echo "api_repo=${API_REPO}"
+            echo "web_repo=${WEB_REPO}"
+            echo "api_sha_tag=${API_SHA_TAG}"
+            echo "web_sha_tag=${WEB_SHA_TAG}"
+            echo "api_local_id=${API_LOCAL_ID}"
+            echo "web_local_id=${WEB_LOCAL_ID}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Scan built API and Web image artifacts for HIGH/CRITICAL vulnerabilities and secrets
+        env:
+          PREBUILT_API_IMAGE: ${{ steps.build_once.outputs.api_sha_tag }}
+          PREBUILT_WEB_IMAGE: ${{ steps.build_once.outputs.web_sha_tag }}
+        run: pnpm verify:security:containers
+
+      - name: Generate SPDX 2.3 SBOMs for built API and Web image artifacts
+        id: sbom
+        env:
+          API_SHA_TAG: ${{ steps.build_once.outputs.api_sha_tag }}
+          WEB_SHA_TAG: ${{ steps.build_once.outputs.web_sha_tag }}
+        run: |
+          mkdir -p release-artifacts
+          API_SBOM_META=$(node scripts/security-scan.mjs sbom "${API_SHA_TAG}" release-artifacts/qa-evidence-hub-api.spdx.json)
+          WEB_SBOM_META=$(node scripts/security-scan.mjs sbom "${WEB_SHA_TAG}" release-artifacts/qa-evidence-hub-web.spdx.json)
+
+          API_SBOM_SHA=$(echo "${API_SBOM_META}" | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(d.sha256);')
+          API_SBOM_PKGS=$(echo "${API_SBOM_META}" | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(d.packageCount));')
+          WEB_SBOM_SHA=$(echo "${WEB_SBOM_META}" | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(d.sha256);')
+          WEB_SBOM_PKGS=$(echo "${WEB_SBOM_META}" | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(d.packageCount));')
+
+          {
+            echo "api_sbom_sha256=${API_SBOM_SHA}"
+            echo "api_sbom_packages=${API_SBOM_PKGS}"
+            echo "web_sbom_sha256=${WEB_SBOM_SHA}"
+            echo "web_sbom_packages=${WEB_SBOM_PKGS}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Smoke-test those exact built API and Web image artifacts through Nginx (F01 + Playwright)
+        env:
+          PREBUILT_API_IMAGE: ${{ steps.build_once.outputs.api_sha_tag }}
+          PREBUILT_WEB_IMAGE: ${{ steps.build_once.outputs.web_sha_tag }}
+        run: |
+          node --test scripts/f01-containers.test.mjs
+          pnpm test:e2e:foundation
+
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish tested API and Web image artifacts to GHCR without rebuilding
+        id: publish
+        env:
+          API_SHA_TAG: ${{ steps.build_once.outputs.api_sha_tag }}
+          WEB_SHA_TAG: ${{ steps.build_once.outputs.web_sha_tag }}
+          API_REPO: ${{ steps.build_once.outputs.api_repo }}
+          WEB_REPO: ${{ steps.build_once.outputs.web_repo }}
+          EXPECTED_API_ID: ${{ steps.build_once.outputs.api_local_id }}
+          EXPECTED_WEB_ID: ${{ steps.build_once.outputs.web_local_id }}
+        run: |
+          # Verify image IDs did not mutate between build, scan, smoke, and push.
+          test "$(docker image inspect "${API_SHA_TAG}" --format '{{.Id}}')" = "${EXPECTED_API_ID}"
+          test "$(docker image inspect "${WEB_SHA_TAG}" --format '{{.Id}}')" = "${EXPECTED_WEB_ID}"
+
+          docker push "${API_SHA_TAG}"
+          docker push "${WEB_SHA_TAG}"
+
+          EXTRA_TAG=""
+          case "${GITHUB_REF}" in
+            refs/tags/v*)
+              EXTRA_TAG="${GITHUB_REF#refs/tags/}"
+              docker tag "${API_SHA_TAG}" "${API_REPO}:${EXTRA_TAG}"
+              docker tag "${WEB_SHA_TAG}" "${WEB_REPO}:${EXTRA_TAG}"
+              docker push "${API_REPO}:${EXTRA_TAG}"
+              docker push "${WEB_REPO}:${EXTRA_TAG}"
+              ;;
+          esac
+
+          API_REPO_DIGEST=$(docker image inspect "${API_SHA_TAG}" --format '{{index .RepoDigests 0}}')
+          WEB_REPO_DIGEST=$(docker image inspect "${WEB_SHA_TAG}" --format '{{index .RepoDigests 0}}')
+          API_DIGEST="${API_REPO_DIGEST#*@}"
+          WEB_DIGEST="${WEB_REPO_DIGEST#*@}"
+
+          {
+            echo "extra_tag=${EXTRA_TAG}"
+            echo "api_repo_digest=${API_REPO_DIGEST}"
+            echo "web_repo_digest=${WEB_REPO_DIGEST}"
+            echo "api_digest=${API_DIGEST}"
+            echo "web_digest=${WEB_DIGEST}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Probe GHCR anonymous pull status for API and Web manifests
+        id: visibility
+        env:
+          OWNER_LC: ${{ steps.build_once.outputs.owner_lc }}
+          API_DIGEST: ${{ steps.publish.outputs.api_digest }}
+          WEB_DIGEST: ${{ steps.publish.outputs.web_digest }}
+        run: |
+          probe_anonymous_pull() {
+            local pkg="$1"
+            local digest="$2"
+            local accept_hdr="application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json"
+            local unauth_code
+            unauth_code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Accept: ${accept_hdr}" \
+              "https://ghcr.io/v2/${OWNER_LC}/${pkg}/manifests/${digest}")
+            if [ "${unauth_code}" = "200" ]; then
+              echo "200"
+              return
+            fi
+
+            local anon_tok
+            anon_tok=$(curl -s "https://ghcr.io/token?scope=repository:${OWNER_LC}/${pkg}:pull" | node -e 'try{const d=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(d.token||"");}catch{}')
+            if [ -n "${anon_tok}" ]; then
+              curl -s -o /dev/null -w '%{http_code}' \
+                -H "Authorization: Bearer ${anon_tok}" \
+                -H "Accept: ${accept_hdr}" \
+                "https://ghcr.io/v2/${OWNER_LC}/${pkg}/manifests/${digest}"
+              return
+            fi
+            echo "${unauth_code}"
+          }
+
+          API_ANON_HTTP=$(probe_anonymous_pull "qa-evidence-hub-api" "${API_DIGEST}")
+          WEB_ANON_HTTP=$(probe_anonymous_pull "qa-evidence-hub-web" "${WEB_DIGEST}")
+
+          echo "Observed GHCR anonymous manifest pull HTTP status: api=${API_ANON_HTTP}, web=${WEB_ANON_HTTP}"
+          {
+            echo "api_anon_http=${API_ANON_HTTP}"
+            echo "web_anon_http=${WEB_ANON_HTTP}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Record release provenance linking manifest digests to commit, passing test run, and SBOMs
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          API_REPO: ${{ steps.build_once.outputs.api_repo }}
+          WEB_REPO: ${{ steps.build_once.outputs.web_repo }}
+          API_SHA_TAG: ${{ steps.build_once.outputs.api_sha_tag }}
+          WEB_SHA_TAG: ${{ steps.build_once.outputs.web_sha_tag }}
+          EXTRA_TAG: ${{ steps.publish.outputs.extra_tag }}
+          API_LOCAL_ID: ${{ steps.build_once.outputs.api_local_id }}
+          WEB_LOCAL_ID: ${{ steps.build_once.outputs.web_local_id }}
+          API_DIGEST: ${{ steps.publish.outputs.api_digest }}
+          WEB_DIGEST: ${{ steps.publish.outputs.web_digest }}
+          API_REPO_DIGEST: ${{ steps.publish.outputs.api_repo_digest }}
+          WEB_REPO_DIGEST: ${{ steps.publish.outputs.web_repo_digest }}
+          API_SBOM_SHA256: ${{ steps.sbom.outputs.api_sbom_sha256 }}
+          API_SBOM_PACKAGES: ${{ steps.sbom.outputs.api_sbom_packages }}
+          WEB_SBOM_SHA256: ${{ steps.sbom.outputs.web_sbom_sha256 }}
+          WEB_SBOM_PACKAGES: ${{ steps.sbom.outputs.web_sbom_packages }}
+          API_ANON_HTTP: ${{ steps.visibility.outputs.api_anon_http }}
+          WEB_ANON_HTTP: ${{ steps.visibility.outputs.web_anon_http }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const extraTag = process.env.EXTRA_TAG;
+            const apiAnon = Number(process.env.API_ANON_HTTP);
+            const webAnon = Number(process.env.WEB_ANON_HTTP);
+            const apiVis = apiAnon === 200 ? "public" : "private";
+            const webVis = webAnon === 200 ? "public" : "private";
+            const apiTags = [process.env.API_SHA_TAG, ...(extraTag ? [`${process.env.API_REPO}:${extraTag}`] : [])];
+            const webTags = [process.env.WEB_SHA_TAG, ...(extraTag ? [`${process.env.WEB_REPO}:${extraTag}`] : [])];
+            const provenance = {
+              schemaVersion: "1.0.0",
+              generatedAtUtc: new Date().toISOString(),
+              repository: process.env.GITHUB_REPOSITORY,
+              commitSha: process.env.GITHUB_SHA,
+              trustedRef: process.env.GITHUB_REF,
+              passingVerificationRun: {
+                workflow: process.env.GITHUB_WORKFLOW,
+                runId: Number(process.env.GITHUB_RUN_ID),
+                runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+                runUrl: process.env.RUN_URL,
+                preReleaseGatesJob: "Pre-Release Quality, Integration, BDD & Security Gates (PASS)",
+                artifactSmokeChecks: [
+                  "scripts/f01-containers.test.mjs (PASS)",
+                  "e2e/foundation-smoke.spec.ts (PASS)",
+                  "scripts/security-scan.mjs containers (PASS)"
+                ]
+              },
+              images: {
+                api: {
+                  package: process.env.API_REPO,
+                  visibility: apiVis,
+                  anonymousPullHttpStatus: apiAnon,
+                  tags: apiTags,
+                  localImageId: process.env.API_LOCAL_ID,
+                  registryManifestDigest: process.env.API_DIGEST,
+                  immutablePullRef: process.env.API_REPO_DIGEST,
+                  sbom: {
+                    artifactFile: "qa-evidence-hub-api.spdx.json",
+                    format: "SPDX-2.3",
+                    sha256: process.env.API_SBOM_SHA256,
+                    packageCount: Number(process.env.API_SBOM_PACKAGES)
+                  }
+                },
+                web: {
+                  package: process.env.WEB_REPO,
+                  visibility: webVis,
+                  anonymousPullHttpStatus: webAnon,
+                  tags: webTags,
+                  localImageId: process.env.WEB_LOCAL_ID,
+                  registryManifestDigest: process.env.WEB_DIGEST,
+                  immutablePullRef: process.env.WEB_REPO_DIGEST,
+                  sbom: {
+                    artifactFile: "qa-evidence-hub-web.spdx.json",
+                    format: "SPDX-2.3",
+                    sha256: process.env.WEB_SBOM_SHA256,
+                    packageCount: Number(process.env.WEB_SBOM_PACKAGES)
+                  }
+                }
+              }
+            };
+            fs.writeFileSync("release-artifacts/release-provenance.json", JSON.stringify(provenance, null, 2) + "\n");
+            const summary = [
+              "## Release Artifact Provenance & SBOM Linkage",
+              `- **Commit SHA:** \`${provenance.commitSha}\``,
+              `- **Trusted Ref:** \`${provenance.trustedRef}\``,
+              `- **Passing Test & Smoke Run:** [${provenance.passingVerificationRun.runId}](${provenance.passingVerificationRun.runUrl})`,
+              "",
+              "| Component | Immutable GHCR Manifest Ref | Observed Visibility (Anon Pull HTTP) | SPDX SBOM Artifact (`SHA-256`) |",
+              "| :--- | :--- | :--- | :--- |",
+              `| \`api\` | \`${provenance.images.api.immutablePullRef}\` | \`${apiVis}\` (\`${apiAnon}\`) | \`qa-evidence-hub-api.spdx.json\` (\`${provenance.images.api.sbom.sha256}\`, ${provenance.images.api.sbom.packageCount} pkgs) |`,
+              `| \`web\` | \`${provenance.images.web.immutablePullRef}\` | \`${webVis}\` (\`${webAnon}\`) | \`qa-evidence-hub-web.spdx.json\` (\`${provenance.images.web.sbom.sha256}\`, ${provenance.images.web.sbom.packageCount} pkgs) |`,
+              ""
+            ].join("\n");
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+          '
+          (cd release-artifacts && sha256sum qa-evidence-hub-api.spdx.json qa-evidence-hub-web.spdx.json release-provenance.json > sha256sums.txt)
+
+      - name: Retain SBOMs and release provenance manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-sboms-and-provenance-${{ github.sha }}
+          path: |
+            release-artifacts/qa-evidence-hub-api.spdx.json
+            release-artifacts/qa-evidence-hub-web.spdx.json
+            release-artifacts/release-provenance.json
+            release-artifacts/sha256sums.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce private GHCR package visibility (fail if public)
+        env:
+          API_ANON_HTTP: ${{ steps.visibility.outputs.api_anon_http }}
+          WEB_ANON_HTTP: ${{ steps.visibility.outputs.web_anon_http }}
+        run: |
+          if [ "${API_ANON_HTTP}" = "200" ] || [ "${WEB_ANON_HTTP}" = "200" ]; then
+            echo "ERROR: GHCR package visibility check FAILED (api=${API_ANON_HTTP}, web=${WEB_ANON_HTTP}). Expected private GHCR packages denying anonymous OCI manifest pulls." >&2
+            echo "Action required in GitHub Package Settings UI: switch visibility to Private (or delete & seed private via CLI PAT) and grant KontentWave/qa-evidence-hub Write under Manage Actions access." >&2
+            exit 1
+          fi
+          echo "GHCR private package visibility verified (api=${API_ANON_HTTP}, web=${WEB_ANON_HTTP})."

@@ -55,8 +55,11 @@ test(
   async (t) => {
     const runId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
     const project = `qaeh_f01_${runId}`;
-    const apiTag = `qaeh-f01-api:${runId}`;
-    const webTag = `qaeh-f01-web:${runId}`;
+    const prebuiltApi = process.env.PREBUILT_API_IMAGE?.trim() ?? '';
+    const prebuiltWeb = process.env.PREBUILT_WEB_IMAGE?.trim() ?? '';
+    const usingPrebuilt = Boolean(prebuiltApi && prebuiltWeb);
+    const apiTag = prebuiltApi || `qaeh-f01-api:${runId}`;
+    const webTag = prebuiltWeb || `qaeh-f01-web:${runId}`;
     const probeContainerName = `${project}_header_probe`;
     const nginxPort = await getFreePort();
     const pgUser = 'qaeh_f01_user';
@@ -100,22 +103,26 @@ test(
           },
         }).catch(() => undefined);
       }
-      await execFileAsync('docker', ['rmi', '-f', apiTag, webTag]).catch(() => undefined);
+      if (!usingPrebuilt) {
+        await execFileAsync('docker', ['rmi', '-f', apiTag, webTag]).catch(() => undefined);
+      }
     });
 
-    // 1. Build production API and Web images from Dockerfiles.
-    await Promise.all([
-      execFileAsync(
-        'docker',
-        ['build', '--target', 'runner', '-f', 'apps/api/Dockerfile', '-t', apiTag, '.'],
-        { cwd: repoRoot, maxBuffer: 20 * 1024 * 1024 },
-      ),
-      execFileAsync(
-        'docker',
-        ['build', '--target', 'runner', '-f', 'apps/web/Dockerfile', '-t', webTag, '.'],
-        { cwd: repoRoot, maxBuffer: 20 * 1024 * 1024 },
-      ),
-    ]);
+    // 1. Build production API and Web images from Dockerfiles (unless prebuilt image refs are supplied).
+    if (!usingPrebuilt) {
+      await Promise.all([
+        execFileAsync(
+          'docker',
+          ['build', '--target', 'runner', '-f', 'apps/api/Dockerfile', '-t', apiTag, '.'],
+          { cwd: repoRoot, maxBuffer: 20 * 1024 * 1024 },
+        ),
+        execFileAsync(
+          'docker',
+          ['build', '--target', 'runner', '-f', 'apps/web/Dockerfile', '-t', webTag, '.'],
+          { cwd: repoRoot, maxBuffer: 20 * 1024 * 1024 },
+        ),
+      ]);
+    }
 
     const [apiInspectOut, webInspectOut] = await Promise.all([
       execFileAsync('docker', ['image', 'inspect', apiTag, '--format', '{{.Id}}|{{.Size}}']),

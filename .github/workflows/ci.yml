@@ -1,0 +1,198 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  quality-and-contracts:
+    name: Quality, Types, OpenAPI & Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Enable pinned pnpm via Corepack
+        run: corepack enable pnpm
+
+      - name: Setup Node.js 24 LTS with pnpm cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install locked workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify immutable image digests and workflow security invariants
+        run: |
+          pnpm verify:digests
+          pnpm verify:workflows
+
+      - name: Check formatting and ESLint boundary rules
+        run: |
+          pnpm format:check
+          pnpm lint
+
+      - name: Verify strict TypeScript and zero OpenAPI client drift
+        run: |
+          pnpm typecheck
+          pnpm openapi:check
+
+      - name: Run unit, contract, and gate-fixture unit suites
+        run: pnpm test
+
+      - name: Enforce 80% line & 80% branch API auth/domain service coverage gate
+        run: |
+          pnpm test:coverage
+          node -e '
+            const fs = require("node:fs");
+            const r = JSON.parse(fs.readFileSync("apps/api/coverage/service-coverage-gate.json", "utf8"));
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### API Auth/Domain Service Coverage\n- **Status:** \`${r.status}\`\n- **Detail:** ${r.message}\n`);
+          '
+
+      - name: Build production packages (api-client, api, web standalone)
+        run: pnpm build
+
+  postgres-integration-and-bdd:
+    name: PostgreSQL Integration & Foundation BDD
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Enable pinned pnpm via Corepack
+        run: corepack enable pnpm
+
+      - name: Setup Node.js 24 LTS with pnpm cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install locked workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run disposable PostgreSQL integration suite
+        run: pnpm test:integration
+
+      - name: Verify parallel test-DB isolation, reset, and failure cleanup
+        run: node --test scripts/test-db-isolation.test.mjs
+
+      - name: Run Cucumber.js Foundation BDD scenarios (fail if zero execute)
+        run: pnpm test:bdd:foundation
+
+      - name: Upload Foundation Cucumber JSON report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cucumber-foundation-report
+          path: apps/api/coverage/cucumber-foundation.json
+          if-no-files-found: error
+          retention-days: 14
+
+  f01-containers-and-smoke:
+    name: F01 Containers, Nginx & Playwright Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Enable pinned pnpm via Corepack
+        run: corepack enable pnpm
+
+      - name: Setup Node.js 24 LTS with pnpm cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install locked workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright headless Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Verify image digest pins before building production images
+        run: pnpm verify:digests
+
+      - name: Build production API and Web runner images once for CI verification
+        run: |
+          docker build --target runner -f apps/api/Dockerfile -t "qaeh-ci-api:${GITHUB_SHA}" .
+          docker build --target runner -f apps/web/Dockerfile -t "qaeh-ci-web:${GITHUB_SHA}" .
+
+      - name: Run F01 container checks (non-root UID, private ports, Nginx headers, volume persistence)
+        env:
+          PREBUILT_API_IMAGE: qaeh-ci-api:${{ github.sha }}
+          PREBUILT_WEB_IMAGE: qaeh-ci-web:${{ github.sha }}
+        run: node --test scripts/f01-containers.test.mjs
+
+      - name: Run Playwright browser smoke through Nginx (/ shows Ready)
+        env:
+          PREBUILT_API_IMAGE: qaeh-ci-api:${{ github.sha }}
+          PREBUILT_WEB_IMAGE: qaeh-ci-web:${{ github.sha }}
+        run: pnpm test:e2e:foundation
+
+      - name: Scan production and Compose container images for HIGH/CRITICAL findings
+        env:
+          PREBUILT_API_IMAGE: qaeh-ci-api:${{ github.sha }}
+          PREBUILT_WEB_IMAGE: qaeh-ci-web:${{ github.sha }}
+        run: pnpm verify:security:containers
+
+      - name: Upload Playwright Foundation smoke report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-foundation-report
+          path: test-results/playwright-foundation.json
+          if-no-files-found: error
+          retention-days: 14
+
+  security-and-licenses:
+    name: Secrets, Static, Dependency, License & Blocking Fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout full repository history for secret scanning
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Enable pinned pnpm via Corepack
+        run: corepack enable pnpm
+
+      - name: Setup Node.js 24 LTS with pnpm cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install locked workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Scan git history and workspace for secrets (Gitleaks)
+        run: pnpm verify:security:secrets
+
+      - name: Run static security analysis (AST SAST + Trivy IaC config)
+        run: pnpm verify:security:static
+
+      - name: Enforce HIGH/CRITICAL dependency vulnerability policy
+        run: pnpm verify:security:deps
+
+      - name: Enforce SPDX license allowlist and reviewed runbook exceptions
+        run: pnpm verify:licenses
+
+      - name: Exercise blocking gates against harmless negative fixtures
+        run: pnpm test:gates:blocking
