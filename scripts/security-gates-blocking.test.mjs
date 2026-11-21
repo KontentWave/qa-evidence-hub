@@ -160,23 +160,26 @@ test('3. Dependency gate blocks unresolved HIGH/CRITICAL advisories in both audi
   }
 });
 
-test('4. Container gate blocks an OCI image containing a HIGH/CRITICAL vulnerable package manifest', { timeout: 120_000 }, async () => {
+test('4. Container gate blocks OCI images containing vulnerable libraries or embedded secrets', { timeout: 120_000 }, async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'qaeh-block-container-'));
   const fixtureTag = `qaeh-vuln-fixture:${Date.now().toString(36)}`;
+  const secretTag = `qaeh-secret-fixture:${Date.now().toString(36)}`;
   try {
-    await fs.mkdir(path.join(tmpDir, 'node_modules', 'lodash'), { recursive: true });
+    // 4a. Vulnerable library manifest inside OCI image
+    const vulnDir = path.join(tmpDir, 'vuln');
+    await fs.mkdir(path.join(vulnDir, 'node_modules', 'lodash'), { recursive: true });
     await fs.writeFile(
-      path.join(tmpDir, 'node_modules', 'lodash', 'package.json'),
+      path.join(vulnDir, 'node_modules', 'lodash', 'package.json'),
       JSON.stringify({ name: 'lodash', version: '4.17.15' }),
       'utf8',
     );
     await fs.writeFile(
-      path.join(tmpDir, 'Dockerfile'),
+      path.join(vulnDir, 'Dockerfile'),
       'FROM scratch\nCOPY node_modules /app/node_modules\n',
       'utf8',
     );
 
-    await execFileAsync('docker', ['build', '-t', fixtureTag, tmpDir]);
+    await execFileAsync('docker', ['build', '-t', fixtureTag, vulnDir]);
     const tarPath = path.join(tmpDir, 'fixture-image.tar');
     await execFileAsync('docker', ['save', '-o', tarPath, fixtureTag]);
 
@@ -187,8 +190,32 @@ test('4. Container gate blocks an OCI image containing a HIGH/CRITICAL vulnerabl
         return true;
       },
     );
+
+    // 4b. Embedded secret inside OCI image (constructed dynamically at runtime)
+    const secretDir = path.join(tmpDir, 'secret');
+    await fs.mkdir(secretDir, { recursive: true });
+    const fakePat = ['ghp', '_', 'Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2'].join('');
+    await fs.writeFile(path.join(secretDir, 'leaked.txt'), `TOKEN=${fakePat}\n`, 'utf8');
+    await fs.writeFile(
+      path.join(secretDir, 'Dockerfile'),
+      'FROM scratch\nCOPY leaked.txt /etc/app/leaked.txt\n',
+      'utf8',
+    );
+
+    await execFileAsync('docker', ['build', '-t', secretTag, secretDir]);
+    const secretTarPath = path.join(tmpDir, 'secret-image.tar');
+    await execFileAsync('docker', ['save', '-o', secretTarPath, secretTag]);
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [securityScanScript, 'scan-image-tar', secretTarPath]),
+      (err) => {
+        assert.notEqual(err.code, 0, 'Expected Trivy container scan to reject embedded secret');
+        assert.doesNotMatch(err.stderr ?? '', new RegExp(fakePat));
+        return true;
+      },
+    );
   } finally {
-    await execFileAsync('docker', ['rmi', '-f', fixtureTag]).catch(() => undefined);
+    await execFileAsync('docker', ['rmi', '-f', fixtureTag, secretTag]).catch(() => undefined);
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });

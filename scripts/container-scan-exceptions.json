@@ -1,0 +1,58 @@
+{
+  "policyVersion": "1.0.0",
+  "docRef": ".github/docs/runbook.md#4-dependency-and-container-vulnerability-policy",
+  "exceptions": [
+    {
+      "imageRole": "postgres",
+      "kind": "vulnerability",
+      "target": "usr/local/bin/gosu",
+      "pkgName": "stdlib",
+      "installedVersion": "v1.24.6",
+      "vulnerabilityIds": [
+        "CVE-2025-61726",
+        "CVE-2025-61729",
+        "CVE-2025-68121",
+        "CVE-2026-25679",
+        "CVE-2026-27145",
+        "CVE-2026-32280",
+        "CVE-2026-32281",
+        "CVE-2026-32283",
+        "CVE-2026-33811",
+        "CVE-2026-33814",
+        "CVE-2026-33818",
+        "CVE-2026-39820",
+        "CVE-2026-39821",
+        "CVE-2026-39822",
+        "CVE-2026-39836",
+        "CVE-2026-42499",
+        "CVE-2026-42504",
+        "CVE-2026-56853",
+        "CVE-2026-56858",
+        "CVE-2026-56859",
+        "CVE-2026-56860",
+        "CVE-2026-56862",
+        "CVE-2026-78667",
+        "CVE-2026-78669",
+        "CVE-2026-97031",
+        "CVE-2026-97054",
+        "CVE-2026-111943"
+      ],
+      "reviewedAt": "2026-11-21",
+      "reviewedBy": "KontentWave",
+      "expiresOn": "2027-02-19",
+      "docRef": ".github/docs/runbook.md#4-dependency-and-container-vulnerability-policy",
+      "rationale": "Upstream official postgres:17-bookworm ships /usr/local/bin/gosu compiled with Go 1.24.6. gosu executes only local privilege-drop syscalls (setuid/setgid/execve) at container entrypoint startup on the internal data_net network and never invokes Go crypto/tls, net/http, net/mail, mime, or xml packages."
+    },
+    {
+      "imageRole": "postgres",
+      "kind": "secret",
+      "target": "/etc/ssl/private/ssl-cert-snakeoil.key",
+      "ruleId": "private-key",
+      "reviewedAt": "2026-11-21",
+      "reviewedBy": "KontentWave",
+      "expiresOn": "2027-02-19",
+      "docRef": ".github/docs/runbook.md#4-dependency-and-container-vulnerability-policy",
+      "rationale": "Stock Debian ssl-cert package placeholder snakeoil key baked into official debian:bookworm / postgres:17-bookworm base layers; PostgreSQL runs unexposed on Docker internal:true data_net and never uses this snakeoil key for public or client TLS."
+    }
+  ]
+}

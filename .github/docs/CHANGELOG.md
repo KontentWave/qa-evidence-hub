@@ -4,6 +4,14 @@ All notable changes to QA Evidence Hub are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0 versions (`0.x.y`) reflect active Phase 1 development on synthetic data only; real client data remains unauthorized until `F03`–`F04` and the section 8 production audit verdict pass in `P1-13`.
 
+## [0.2.1] - 2026-11-21
+
+### Security & Fixed (`P1-02` `F02` Review Hardening)
+
+- Hardened GHCR privacy verification (`scripts/verify-ghcr-privacy.mjs` + `scripts/verify-ghcr-privacy.test.mjs` + `.github/workflows/release.yml`): verify package existence (`HTTP 200`) and private OCI denial (`401`/`403` `UNAUTHORIZED`/`DENIED` JSON) **before** building/pushing, and require authenticated `HTTP 200` digest/tag parity plus conclusive `401`/`403` OCI error JSON on unauthenticated/anonymous pulls **after** publishing (failing closed on `200`, `404`, and `5xx` outages).
+- Enabled full Trivy `library` + embedded `secret` scanning (`--scanners vuln,secret --pkg-types library`) alongside `os` scanning on `postgres:17-bookworm` (`scripts/security-scan.mjs`), replacing the broad `checkAllLibrary: false` skip with an expiry-bounded, target/package/CVE/rule-pinned allowlist (`scripts/container-scan-exceptions.json` + `scripts/container-scan-exceptions.test.mjs`) and adding an OCI embedded-secret negative fixture in `scripts/security-gates-blocking.test.mjs`.
+- Preserved immutable `sha-<12>` commit tags across `main` and `v*` release runs (`concurrency.group: release-${{ github.sha }}` + reusing existing `sha-<12>` GHCR digests and promoting `:vX.Y.Z` via OCI v2 manifest aliasing so commit and version tags resolve to the identical `@sha256:` digest).
+
 ## [0.2.0] - 2026-11-21
 
 ### Added (`P1-02` — CI pipeline, repository controls, and `F01`/`F02` gate completion)
