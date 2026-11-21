@@ -4,13 +4,13 @@ All notable changes to QA Evidence Hub are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0 versions (`0.x.y`) reflect active Phase 1 development on synthetic data only; real client data remains unauthorized until `F03`–`F04` and the section 8 production audit verdict pass in `P1-13`.
 
-## [0.2.0-rc.4] - 2026-11-20
+## [0.2.0] - 2026-11-21
 
 ### Added (`P1-02` — CI pipeline, repository controls, and `F01`/`F02` gate completion)
 
 - Added SHA-pinned, read-only pull-request CI workflow (`.github/workflows/ci.yml`) running formatting, ESLint boundary rules, strict TypeScript, OpenAPI drift check, Vitest unit/contract tests, 80% line/branch API auth/domain coverage gate (`N/A` until `P1-03`), disposable PostgreSQL integration + isolation checks, Cucumber.js Foundation BDD (`specs/foundation/health-readiness.feature` with zero-scenario failure guard), production builds, `F01` container/Nginx/persistence suite, Playwright browser smoke (`e2e/foundation-smoke.spec.ts`), security/license scans, and blocking-fixture verification.
-- Added trusted-ref release workflow (`.github/workflows/release.yml`) that builds `api` and `web` production images once, scans and smoke-tests those exact artifacts behind Nginx, generates SPDX 2.3 JSON SBOMs (`syft`), publishes to private GHCR packages (`ghcr.io/kontentwave/qa-evidence-hub-api` and `ghcr.io/kontentwave/qa-evidence-hub-web`), verifies private package visibility / anonymous pull denial, and retains `release-provenance.json` + SBOM artifacts.
-- Added `.github/CODEOWNERS`, `.github/pull_request_template.md`, and `.github/dependabot.yml` across `npm`, `github-actions`, `docker`, and `docker-compose`.
+- Added trusted-ref release workflow (`.github/workflows/release.yml`) that builds `api` and `web` production images once, scans and smoke-tests those exact artifacts behind Nginx, generates SPDX 2.3 JSON SBOMs (`syft`), publishes to private GHCR packages (`ghcr.io/kontentwave/qa-evidence-hub-api` and `ghcr.io/kontentwave/qa-evidence-hub-web`), verifies private package visibility / anonymous pull denial (`HTTP 401`), and retains `release-provenance.json` + SBOM artifacts.
+- Added `.github/CODEOWNERS`, `.github/pull_request_template.md`, and `.github/dependabot.yml` across `npm`, `github-actions`, `docker`, and `docker-compose` (with `version-update:semver-major` ignores keeping `node` base images and `@types/node` on Node 24 LTS and `typescript` on `5.x` during Phase 1).
 - Added executable gate scripts and negative-fixture tests: `scripts/check-format*`, `scripts/check-workflows*`, `scripts/check-api-service-coverage*`, `scripts/check-licenses*` + `scripts/license-policy.json`, `scripts/check-static-security.mjs`, `scripts/security-scan.mjs` + `scripts/dependency-exceptions.json`, `scripts/verify-cucumber-executed*`, `scripts/run-playwright-foundation-smoke.mjs`, and `scripts/security-gates-blocking.test.mjs`.
 - Added [ADR-015](./adr/015-phase1-delivery-profile.md) and initial [runbook.md](./runbook.md) documenting delivery simplifications, coverage exclusions, SPDX license policy and reviewed exceptions, vulnerability gating, solo-owner branch protection, and private GHCR provenance.
 
