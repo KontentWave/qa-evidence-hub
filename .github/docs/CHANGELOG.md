@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Security & Changed (`P1-02`)
 
-- Updated pinned container base images to `node:24.22.3-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0`, `nginx:1.30-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3` (`nginx/1.30.7`, remediating `CVE-2026-113425` and peer CVEs), and `postgres:17-bookworm@sha256:837bed18782820fe967067cb5328b02b0d9992c1be9a37ee0c9c492cfc03af3b`.
+- Updated pinned container base images to `node:24.22.3-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0`, `nginx:1.30-alpine-slim@sha256:8c950211a641ec5b23f265450517001f6bcca533666120ebe36cb4cff3d00a55` (`nginx/1.30.7` minimal image without unused XSLT/`libxml2` modules, remediating `CVE-2026-113425` and `CVE-2026-86144`), and `postgres:17-bookworm@sha256:837bed18782820fe967067cb5328b02b0d9992c1be9a37ee0c9c492cfc03af3b`.
 - Hardened `apps/api/Dockerfile` and `apps/web/Dockerfile` `runner` stages with `apt-get upgrade -y` (`zlib1g` fix) and removal of unused global `npm`, `npx`, `corepack`, and `yarn` CLI bundles.
 - Added `pnpm-workspace.yaml` `overrides.effect: 3.22.5` remediating `GHSA-7589-6fvf-x4pw` (`0` vulnerabilities in `pnpm audit` across prod and dev); reconciled upstream withdrawal of `picomatch` `GHSA-fc5q-39xc-vjpf` (`VG-P101-03`).
 
