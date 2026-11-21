@@ -1,4 +1,4 @@
-FROM node:24.22.3-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0 AS deps
+FROM node:26.13.1-trixie-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS deps
 
 WORKDIR /workspace
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -18,7 +18,7 @@ COPY apps/web ./apps/web
 
 RUN pnpm --filter @qa-evidence-hub/api-client build && pnpm --filter @qa-evidence-hub/web build
 
-FROM node:24.22.3-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0 AS runner
+FROM node:26.13.1-trixie-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production
