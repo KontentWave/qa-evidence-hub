@@ -59,10 +59,18 @@ describe('PasswordHasherService', () => {
 
     // Malformed PHC strings and excessive/unsafe parameters fail closed without throwing.
     expect(await hasher.verifyPassword('ValidPass!123456', 'not-a-phc-hash')).toBe(false);
+    for (const disallowedLn of [13, 17, 18, 22]) {
+      expect(
+        await hasher.verifyPassword(
+          'ValidPass!123456',
+          `$scrypt$ln=${disallowedLn},r=8,p=1$AAAAAAAAAAAAAAAAAAAAAA$${'A'.repeat(86)}`,
+        ),
+      ).toBe(false);
+    }
     expect(
       await hasher.verifyPassword(
         'ValidPass!123456',
-        '$scrypt$ln=22,r=8,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        `$scrypt$ln=16,r=16,p=1$AAAAAAAAAAAAAAAAAAAAAA$${'A'.repeat(86)}`,
       ),
     ).toBe(false);
     expect(
@@ -71,6 +79,23 @@ describe('PasswordHasherService', () => {
         '$scrypt$ln=14,r=8,p=1$c2hvcnQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       ),
     ).toBe(false);
+
+    // Accepted upper bound ln=16 hashes and verifies cleanly within the 128 MiB limit,
+    // and existing CLI-provisioned ln=16 hashes verify using stored parameters even when defaultLn=14.
+    const upperBoundEnv = validateApiEnv({
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://qaeh:synthetic@localhost:5432/qaeh',
+      TRUST_PROXY: 'false',
+      AUTH_PASSWORD_SCRYPT_LN: '16',
+    });
+    const upperBoundHasher = new PasswordHasherService(upperBoundEnv);
+    const cliLikeHashLn16 = await upperBoundHasher.hashPassword('UpperBoundPass!2026#16');
+    expect(cliLikeHashLn16).toMatch(/^\$scrypt\$ln=16,r=8,p=1\$/);
+    expect(await upperBoundHasher.verifyPassword('UpperBoundPass!2026#16', cliLikeHashLn16)).toBe(
+      true,
+    );
+    expect(await hasher.verifyPassword('UpperBoundPass!2026#16', cliLikeHashLn16)).toBe(true);
+    expect(await upperBoundHasher.verifyPassword('SyntheticSecret!2026#0', hash0)).toBe(true);
 
     // Queue overflow sheds excess concurrent hashing attempts with LoginThrottledException.
     const burst = Array.from({ length: 22 }, () => hasher.verifyOrEqualize('ValidPass!123456', null));
@@ -141,41 +166,108 @@ describe('CsrfService', () => {
 });
 
 describe('LoginThrottlerService', () => {
-  it('enforces window expiry, temporary blocking with Retry-After, and bounded bucket eviction', () => {
+  it('counts failures and in-flight reservations, settles once per outcome, preserves active reservations on success and eviction, and recovers after error and block expiry', () => {
     const throttler = new LoginThrottlerService(baseTestEnv);
     const t0 = 1_700_000_000_000;
 
-    throttler.assertAllowed('198.51.100.1', t0);
-    throttler.recordFailure('198.51.100.1', t0);
-    throttler.recordFailure('198.51.100.1', t0 + 1000);
-    expect(() => throttler.recordFailure('198.51.100.1', t0 + 2000)).toThrow(LoginThrottledException);
-    expect(() => throttler.assertAllowed('198.51.100.1', t0 + 5000)).toThrow(LoginThrottledException);
+    // Admission at configured limit (maxAttempts = 3): 3 concurrent reservations admitted, 4th rejected.
+    const res1 = throttler.reserveAttempt('198.51.100.1', t0);
+    const res2 = throttler.reserveAttempt('198.51.100.1', t0 + 10);
+    const res3 = throttler.reserveAttempt('198.51.100.1', t0 + 20);
+    expect(() => throttler.reserveAttempt('198.51.100.1', t0 + 30)).toThrow(LoginThrottledException);
 
-    // Unblocked after block duration expires and window resets.
-    throttler.assertAllowed('198.51.100.1', t0 + 130_000);
-    throttler.recordFailure('   ', t0 + 130_000);
-    throttler.resetKey('');
+    // Independent IP is unaffected while 198.51.100.1 is at its in-flight limit.
+    const otherIpRes = throttler.reserveAttempt('198.51.100.2', t0 + 30);
+    otherIpRes.settle('success', t0 + 40);
 
-    // Capacity bound (maxKeys = 16): inserting 25 keys never exceeds 16 tracked buckets.
+    // Internal error releases reservation without recording a failure; double-settle is a no-op.
+    res1.settle('error', t0 + 50);
+    res1.settle('invalid_credentials', t0 + 60);
+    expect(res1.isSettled).toBe(true);
+
+    // One slot freed on 198.51.100.1 after error; reserving again succeeds, and a 4th is still blocked.
+    const res4 = throttler.reserveAttempt('198.51.100.1', t0 + 70);
+    expect(() => throttler.reserveAttempt('198.51.100.1', t0 + 80)).toThrow(LoginThrottledException);
+
+    // Settling success on res2 clears prior failures while preserving res3 and res4's in-flight reservations (2 remaining).
+    res2.settle('success', t0 + 90);
+    const res5 = throttler.reserveAttempt('198.51.100.1', t0 + 100);
+    expect(() => throttler.reserveAttempt('198.51.100.1', t0 + 110)).toThrow(LoginThrottledException);
+
+    // Settle all 3 active reservations as invalid_credentials -> reaches maxAttempts (3) and blocks for blockSeconds (120s).
+    res3.settle('invalid_credentials', t0 + 1000);
+    res4.settle('invalid_credentials', t0 + 1100);
+    res5.settle('invalid_credentials', t0 + 1200);
+    expect(() => throttler.reserveAttempt('198.51.100.1', t0 + 5000)).toThrow(LoginThrottledException);
+
+    // Recovery after block expiry (even when windowSeconds > blockSeconds or vice versa).
+    const recovered = throttler.reserveAttempt('198.51.100.1', t0 + 125_000);
+    recovered.settle('success', t0 + 125_100);
+
+    // Blank/unknown IP normalization and clean error cleanup.
+    const blankRes = throttler.reserveAttempt('   ', t0 + 130_000);
+    blankRes.settle('error', t0 + 130_050);
+
+    // Bucket eviction (maxKeys = 16) preserves active in-flight reservations on older keys.
+    const pinnedA = throttler.reserveAttempt('198.51.100.200', t0 + 200_000);
+    const pinnedB = throttler.reserveAttempt('198.51.100.200', t0 + 200_001);
     for (let i = 0; i < 25; i += 1) {
-      throttler.recordFailure(`203.0.113.${i}`, t0 + 200_000 + i);
+      const transient = throttler.reserveAttempt(`203.0.113.${i}`, t0 + 200_010 + i);
+      transient.settle('invalid_credentials', t0 + 200_020 + i);
     }
     expect(throttler.getTrackedKeyCount()).toBeLessThanOrEqual(16);
 
-    // Expired entries are swept before evicting active ones.
-    throttler.recordFailure('203.0.113.250', t0 + 500_000);
-    expect(throttler.getTrackedKeyCount()).toBe(1);
+    // 198.51.100.200 still has 2 in-flight reservations: 1 more is allowed (total 3), 2nd more is throttled.
+    const pinnedC = throttler.reserveAttempt('198.51.100.200', t0 + 200_100);
+    expect(() => throttler.reserveAttempt('198.51.100.200', t0 + 200_101)).toThrow(
+      LoginThrottledException,
+    );
+    pinnedA.settle('error', t0 + 200_200);
+    pinnedB.settle('error', t0 + 200_201);
+    pinnedC.settle('error', t0 + 200_202);
 
-    // Single-attempt strict policy blocks on first failure.
+    // Expired idle entries are swept before evicting active ones once maxKeys (16) is reached.
+    const afterSweep1 = throttler.reserveAttempt('203.0.113.250', t0 + 500_000);
+    afterSweep1.settle('invalid_credentials', t0 + 500_010);
+    const afterSweep2 = throttler.reserveAttempt('203.0.113.251', t0 + 500_020);
+    afterSweep2.settle('invalid_credentials', t0 + 500_030);
+    expect(throttler.getTrackedKeyCount()).toBe(2);
+
+    // Single-attempt strict policy admits 1 attempt, blocks on its invalid-credentials settlement, and recovers after block expiry.
     const singleAttemptEnv = validateApiEnv({
       NODE_ENV: 'test',
       DATABASE_URL: 'postgresql://qaeh:synthetic@localhost:5432/qaeh',
       TRUST_PROXY: 'false',
       AUTH_LOGIN_MAX_ATTEMPTS: '1',
+      AUTH_LOGIN_WINDOW_SECONDS: '300',
+      AUTH_LOGIN_BLOCK_SECONDS: '10',
       AUTH_THROTTLE_MAX_KEYS: '16',
     });
     const strictThrottler = new LoginThrottlerService(singleAttemptEnv);
-    expect(() => strictThrottler.recordFailure('198.51.100.77', t0)).toThrow(LoginThrottledException);
+    const strictAttempt = strictThrottler.reserveAttempt('198.51.100.77', t0);
+    expect(() => strictThrottler.reserveAttempt('198.51.100.77', t0 + 1)).toThrow(
+      LoginThrottledException,
+    );
+    strictAttempt.settle('invalid_credentials', t0 + 50);
+    expect(() => strictThrottler.reserveAttempt('198.51.100.77', t0 + 5000)).toThrow(
+      LoginThrottledException,
+    );
+    const afterStrictBlock = strictThrottler.reserveAttempt('198.51.100.77', t0 + 11_000);
+    afterStrictBlock.settle('success', t0 + 11_010);
+
+    // If all maxKeys (16) slots simultaneously hold in-flight reservations, excess keys shed with 429 rather than evicting active reservations.
+    const activeHandles = Array.from({ length: 16 }, (_, idx) =>
+      strictThrottler.reserveAttempt(`198.51.101.${idx}`, t0 + 20_000 + idx),
+    );
+    expect(() => strictThrottler.reserveAttempt('198.51.101.99', t0 + 20_100)).toThrow(
+      LoginThrottledException,
+    );
+    activeHandles[0]!.settle('error', t0 + 20_101);
+    const admittedAfterRelease = strictThrottler.reserveAttempt('198.51.101.99', t0 + 20_102);
+    admittedAfterRelease.settle('success', t0 + 20_103);
+    for (const h of activeHandles.slice(1)) {
+      h.settle('error', t0 + 20_200);
+    }
   });
 });
 
@@ -214,6 +306,14 @@ describe('AuthService and AuthAndCsrfGuard', () => {
       owner: {
         findFirst: vi.fn(async () => ownerRow),
       },
+      $queryRaw: vi.fn(async () => [
+        {
+          id: ownerRow.id,
+          login_identifier: ownerRow.loginIdentifier,
+          password_hash: ownerRow.passwordHash,
+          timezone: ownerRow.timezone,
+        },
+      ]),
       authSession: {
         findUnique: vi.fn(async ({ where }: { where: { tokenDigest: string } }) => {
           const found = storedSessions.get(where.tokenDigest);
@@ -536,6 +636,42 @@ describe('AuthService and AuthAndCsrfGuard', () => {
     }
     const activeRemaining = [...storedSessions.values()].filter((s) => s.revokedAt === null);
     expect(activeRemaining.length).toBeLessThanOrEqual(20);
+
+    // Concurrent password rotation detected on locked owner row returns generic 401 without creating a session.
+    const sessionCountBeforeRace = storedSessions.size;
+    mockClient.$queryRaw.mockResolvedValueOnce([
+      {
+        id: ownerRow.id,
+        login_identifier: ownerRow.loginIdentifier,
+        password_hash: await hasher.hashPassword('RotatedElsewhere!2026'),
+        timezone: ownerRow.timezone,
+      },
+    ]);
+    await expect(
+      service.login({
+        loginIdentifier: 'owner@synthetic.invalid',
+        password: 'ValidSyntheticPass!2026',
+        clientIp: '198.51.100.190',
+      }),
+    ).rejects.toThrow(UnauthorizedException);
+    expect(storedSessions.size).toBe(sessionCountBeforeRace);
+
+    // Internal DB error settles the throttler reservation on error without blocking subsequent valid attempts.
+    mockClient.owner.findFirst.mockRejectedValueOnce(new Error('transient db outage'));
+    await expect(
+      service.login({
+        loginIdentifier: 'owner@synthetic.invalid',
+        password: 'ValidSyntheticPass!2026',
+        clientIp: '198.51.100.191',
+      }),
+    ).rejects.toThrow('transient db outage');
+
+    const postErrorLogin = await service.login({
+      loginIdentifier: 'owner@synthetic.invalid',
+      password: 'ValidSyntheticPass!2026',
+      clientIp: '198.51.100.191',
+    });
+    expect(postErrorLogin.owner.id).toBe(ownerRow.id);
 
     await service.logout(verifiedB!.actor);
     expect(await service.authenticateSessionToken(loginB.rawSessionToken)).toBeNull();

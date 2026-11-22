@@ -138,4 +138,31 @@ describe('validateApiEnv', () => {
       }).appOrigin,
     ).toBe('http://127.0.0.1:8080');
   });
+
+  it('defaults AUTH_PASSWORD_SCRYPT_LN to 16, accepts 14-16, and rejects 17 and 18 with a clear configuration error', () => {
+    expect(validateApiEnv(validBaseEnv).passwordScryptLn).toBe(16);
+
+    for (const allowed of ['14', '15', '16']) {
+      expect(
+        validateApiEnv({
+          ...validBaseEnv,
+          AUTH_PASSWORD_SCRYPT_LN: allowed,
+        }).passwordScryptLn,
+      ).toBe(Number(allowed));
+    }
+
+    for (const rejected of ['13', '17', '18']) {
+      let caught: unknown;
+      try {
+        validateApiEnv({
+          ...validBaseEnv,
+          AUTH_PASSWORD_SCRYPT_LN: rejected,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(EnvValidationError);
+      expect((caught as Error).message).toMatch(/AUTH_PASSWORD_SCRYPT_LN.*14.*16/);
+    }
+  });
 });

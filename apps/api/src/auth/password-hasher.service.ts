@@ -8,10 +8,16 @@ const SCRYPT_P = 1;
 const SCRYPT_KEYLEN = 64;
 const SCRYPT_MAXMEM = 128 * 1024 * 1024;
 const MIN_ALLOWED_LN = 14;
-const MAX_ALLOWED_LN = 18;
+const MAX_ALLOWED_LN = 16;
 const MAX_PASSWORD_BYTES = 1024;
 const MAX_CONCURRENT_HASHES = 4;
 const MAX_HASH_WAIT_QUEUE = 16;
+
+function exceedsScryptMaxMem(ln: number, r: number, p: number): boolean {
+  const cost = 1 << ln;
+  const requiredBytes = 128 * cost * r + 128 * r * p + 256 * r + 64;
+  return requiredBytes > SCRYPT_MAXMEM;
+}
 
 const PHC_SCRYPT_REGEX =
   /^\$scrypt\$ln=(\d{1,2}),r=(\d{1,2}),p=(\d{1,2})\$([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]+)$/;
@@ -67,7 +73,15 @@ export class PasswordHasherService {
     const ln = Number.parseInt(match[1]!, 10);
     const r = Number.parseInt(match[2]!, 10);
     const p = Number.parseInt(match[3]!, 10);
-    if (ln < MIN_ALLOWED_LN || ln > MAX_ALLOWED_LN || r < 1 || r > 16 || p < 1 || p > 4) {
+    if (
+      ln < MIN_ALLOWED_LN ||
+      ln > MAX_ALLOWED_LN ||
+      r < 1 ||
+      r > 16 ||
+      p < 1 ||
+      p > 4 ||
+      exceedsScryptMaxMem(ln, r, p)
+    ) {
       return false;
     }
 

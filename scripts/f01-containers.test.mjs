@@ -363,6 +363,115 @@ test(
     );
     assert.doesNotMatch(`${provisionOut.stdout}\n${provisionOut.stderr}`, new RegExp(ownerPassword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 
+    // 5b. On Node 24.22.3 (production API image), verify AUTH_PASSWORD_SCRYPT_LN=17 and 18 fail validation cleanly,
+    // while upper bound 16 initializes the API and verifies both fresh ln=16 hashes and CLI-provisioned hashes (including under ln=14).
+    const apiNodeVersionOut = await execFileAsync('docker', ['run', '--rm', apiImageId, 'node', '--version']);
+    assert.equal(apiNodeVersionOut.stdout.trim(), 'v24.22.3');
+
+    for (const rejectedLn of ['17', '18']) {
+      let rejectedExit = 0;
+      let rejectedOutput = '';
+      try {
+        await execFileAsync('docker', [
+          'run',
+          '--rm',
+          '-e',
+          'NODE_ENV=production',
+          '-e',
+          'APP_ORIGIN=http://127.0.0.1:8080',
+          '-e',
+          `DATABASE_URL=${internalDbUrl}`,
+          '-e',
+          'TRUST_PROXY=nginx',
+          '-e',
+          `AUTH_PASSWORD_SCRYPT_LN=${rejectedLn}`,
+          apiImageId,
+          'node',
+          'dist/main.js',
+        ]);
+      } catch (err) {
+        rejectedExit = err.code ?? 1;
+        rejectedOutput = `${err.stdout ?? ''}\n${err.stderr ?? ''}`;
+      }
+      assert.notEqual(rejectedExit, 0, `Expected AUTH_PASSWORD_SCRYPT_LN=${rejectedLn} to exit non-zero`);
+      assert.match(rejectedOutput, /AUTH_PASSWORD_SCRYPT_LN.*14.*16/);
+      assert.doesNotMatch(rejectedOutput, /memory limit exceeded/i);
+    }
+
+    const scryptRuntimeProbeScript = [
+      'require("reflect-metadata");',
+      'const assert = require("node:assert/strict");',
+      'const { NestFactory } = require("@nestjs/core");',
+      'const { AppModule } = require("./dist/app.module");',
+      'const { configureApp } = require("./dist/app.setup");',
+      'const { validateApiEnv } = require("./dist/config/env.validation");',
+      'const { PasswordHasherService } = require("./dist/auth/password-hasher.service");',
+      'const { AuthService } = require("./dist/auth/auth.service");',
+      'const { PrismaService } = require("./dist/prisma/prisma.service");',
+      '(async () => {',
+      '  assert.equal(process.version, "v24.22.3");',
+      '  const baseRaw = {',
+      '    NODE_ENV: "production",',
+      '    APP_ORIGIN: "http://127.0.0.1:8080",',
+      '    DATABASE_URL: process.env.DATABASE_URL,',
+      '    TRUST_PROXY: "nginx",',
+      '  };',
+      '  const env16 = validateApiEnv({ ...baseRaw, AUTH_PASSWORD_SCRYPT_LN: "16" });',
+      '  const app16 = await NestFactory.create(AppModule.register(env16), { logger: false });',
+      '  configureApp(app16, env16, { mountSwaggerUi: false });',
+      '  await app16.init();',
+      '  try {',
+      '    const hasher16 = app16.get(PasswordHasherService);',
+      '    const sampleHash = await hasher16.hashPassword("SyntheticUpperBound!2026#Node24223");',
+      '    assert.match(sampleHash, /^\\$scrypt\\$ln=16,r=8,p=1\\$/);',
+      '    assert.equal(await hasher16.verifyPassword("SyntheticUpperBound!2026#Node24223", sampleHash), true);',
+      '    const login16 = await app16.get(AuthService).login({',
+      '      loginIdentifier: process.env.OWNER_LOGIN,',
+      '      password: process.env.OWNER_PASSWORD,',
+      '      clientIp: "198.51.100.70",',
+      '    });',
+      '    assert.equal(login16.owner.loginIdentifier, process.env.OWNER_LOGIN);',
+      '  } finally {',
+      '    await app16.close();',
+      '  }',
+      '  const env14 = validateApiEnv({ ...baseRaw, AUTH_PASSWORD_SCRYPT_LN: "14" });',
+      '  const app14 = await NestFactory.create(AppModule.register(env14), { logger: false });',
+      '  configureApp(app14, env14, { mountSwaggerUi: false });',
+      '  await app14.init();',
+      '  try {',
+      '    const login14 = await app14.get(AuthService).login({',
+      '      loginIdentifier: process.env.OWNER_LOGIN,',
+      '      password: process.env.OWNER_PASSWORD,',
+      '      clientIp: "198.51.100.71",',
+      '    });',
+      '    assert.equal(login14.owner.loginIdentifier, process.env.OWNER_LOGIN);',
+      '    await app14.get(PrismaService).client.authSession.deleteMany({});',
+      '  } finally {',
+      '    await app14.close();',
+      '  }',
+      '})().catch((err) => {',
+      '  console.error(err);',
+      '  process.exit(1);',
+      '});',
+    ].join('\n');
+
+    await execFileAsync('docker', [
+      'run',
+      '--rm',
+      '--network',
+      dataNetworkName,
+      '-e',
+      `DATABASE_URL=${internalDbUrl}`,
+      '-e',
+      `OWNER_LOGIN=${ownerLogin}`,
+      '-e',
+      `OWNER_PASSWORD=${ownerPassword}`,
+      apiImageId,
+      'node',
+      '-e',
+      scryptRuntimeProbeScript,
+    ]);
+
     // 6. Verify single-origin routing, anonymous denial, login/Ready/logout boundary, and static assets via Nginx.
     const baseOrigin = `http://127.0.0.1:${nginxPort}`;
 

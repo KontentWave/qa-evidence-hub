@@ -278,6 +278,27 @@ function validateDatabaseUrl(raw: string | undefined, issues: string[]): string 
   return trimmed;
 }
 
+function parsePasswordScryptLn(raw: string | undefined, issues: string[]): number {
+  if (raw === undefined || raw.trim() === '') {
+    return 16;
+  }
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    issues.push(
+      'AUTH_PASSWORD_SCRYPT_LN must be an integer between 14 and 16 (within the 128 MiB per-hash scrypt memory limit)',
+    );
+    return 16;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 14 || parsed > 16) {
+    issues.push(
+      'AUTH_PASSWORD_SCRYPT_LN must be between 14 and 16 (within the 128 MiB per-hash scrypt memory limit)',
+    );
+    return 16;
+  }
+  return parsed;
+}
+
 export function validateApiEnv(rawEnv: Record<string, string | undefined>): ApiEnv {
   const issues: string[] = [];
 
@@ -365,14 +386,7 @@ export function validateApiEnv(rawEnv: Record<string, string | undefined>): ApiE
     65_536,
     issues,
   );
-  const passwordScryptLn = parseBoundedInt(
-    rawEnv.AUTH_PASSWORD_SCRYPT_LN,
-    16,
-    'AUTH_PASSWORD_SCRYPT_LN',
-    14,
-    18,
-    issues,
-  );
+  const passwordScryptLn = parsePasswordScryptLn(rawEnv.AUTH_PASSWORD_SCRYPT_LN, issues);
 
   if (issues.length > 0) {
     throw new EnvValidationError(issues);

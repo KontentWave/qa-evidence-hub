@@ -2,8 +2,16 @@ import { Inject, Injectable } from '@nestjs/common';
 import { LoginThrottledException } from '../common/http-exception.filter';
 import { API_ENV, type ApiEnv } from '../config/env.validation';
 
+export type LoginAttemptSettlement = 'success' | 'invalid_credentials' | 'error';
+
+export interface LoginAttemptReservation {
+  readonly isSettled: boolean;
+  settle(outcome: LoginAttemptSettlement, nowMs?: number): void;
+}
+
 interface ThrottleBucket {
   failures: number;
+  inFlight: number;
   windowStartedAtMs: number;
   blockedUntilMs: number;
 }
@@ -14,6 +22,7 @@ export class LoginThrottlerService {
   private readonly windowMs: number;
   private readonly blockMs: number;
   private readonly maxKeys: number;
+  private readonly inFlightRetryAfterSeconds: number;
   private readonly buckets = new Map<string, ThrottleBucket>();
 
   constructor(@Inject(API_ENV) env: ApiEnv) {
@@ -21,61 +30,110 @@ export class LoginThrottlerService {
     this.windowMs = env.loginWindowSeconds * 1000;
     this.blockMs = env.loginBlockSeconds * 1000;
     this.maxKeys = env.loginThrottleMaxKeys;
+    this.inFlightRetryAfterSeconds = Math.max(1, Math.min(5, env.loginBlockSeconds));
   }
 
-  public assertAllowed(rawClientIp: string, nowMs = Date.now()): void {
+  public reserveAttempt(rawClientIp: string, nowMs = Date.now()): LoginAttemptReservation {
     const key = this.normalizeKey(rawClientIp);
-    const bucket = this.buckets.get(key);
-    if (!bucket) {
-      return;
-    }
+    let bucket = this.buckets.get(key);
 
-    if (bucket.blockedUntilMs > nowMs) {
-      const retryAfterSeconds = Math.max(1, Math.ceil((bucket.blockedUntilMs - nowMs) / 1000));
-      throw new LoginThrottledException(retryAfterSeconds);
-    }
-
-    if (nowMs - bucket.windowStartedAtMs >= this.windowMs) {
-      this.buckets.delete(key);
-    }
-  }
-
-  public recordFailure(rawClientIp: string, nowMs = Date.now()): void {
-    const key = this.normalizeKey(rawClientIp);
-    const existing = this.buckets.get(key);
-
-    if (!existing || nowMs - existing.windowStartedAtMs >= this.windowMs) {
-      this.buckets.delete(key);
-      this.ensureCapacity(nowMs);
-      const blockedUntilMs = this.maxAttempts <= 1 ? nowMs + this.blockMs : 0;
-      this.buckets.set(key, {
-        failures: 1,
-        windowStartedAtMs: nowMs,
-        blockedUntilMs,
-      });
-      if (blockedUntilMs > nowMs) {
-        throw new LoginThrottledException(Math.ceil(this.blockMs / 1000));
+    if (bucket) {
+      if (bucket.blockedUntilMs > nowMs) {
+        const retryAfterSeconds = Math.max(1, Math.ceil((bucket.blockedUntilMs - nowMs) / 1000));
+        throw new LoginThrottledException(retryAfterSeconds);
       }
-      return;
+
+      const blockExpired = bucket.blockedUntilMs > 0 && bucket.blockedUntilMs <= nowMs;
+      const windowExpired = nowMs - bucket.windowStartedAtMs >= this.windowMs;
+      if (blockExpired || windowExpired) {
+        bucket.failures = 0;
+        bucket.blockedUntilMs = 0;
+        bucket.windowStartedAtMs = nowMs;
+      }
+
+      if (bucket.failures + bucket.inFlight >= this.maxAttempts) {
+        throw new LoginThrottledException(this.inFlightRetryAfterSeconds);
+      }
+
+      bucket.inFlight += 1;
+      this.buckets.delete(key);
+      this.buckets.set(key, bucket);
+    } else {
+      this.ensureCapacity(nowMs);
+      bucket = {
+        failures: 0,
+        inFlight: 1,
+        windowStartedAtMs: nowMs,
+        blockedUntilMs: 0,
+      };
+      this.buckets.set(key, bucket);
     }
 
-    existing.failures += 1;
-    // Refresh insertion order for LRU behavior.
-    this.buckets.delete(key);
-    this.buckets.set(key, existing);
+    const reservedBucket = bucket;
+    let settled = false;
 
-    if (existing.failures >= this.maxAttempts) {
-      existing.blockedUntilMs = nowMs + this.blockMs;
-      throw new LoginThrottledException(Math.ceil(this.blockMs / 1000));
-    }
-  }
-
-  public resetKey(rawClientIp: string): void {
-    this.buckets.delete(this.normalizeKey(rawClientIp));
+    return {
+      get isSettled(): boolean {
+        return settled;
+      },
+      settle: (outcome: LoginAttemptSettlement, settleNowMs = Date.now()): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this.settleBucket(key, reservedBucket, outcome, settleNowMs);
+      },
+    };
   }
 
   public getTrackedKeyCount(): number {
     return this.buckets.size;
+  }
+
+  private settleBucket(
+    key: string,
+    bucket: ThrottleBucket,
+    outcome: LoginAttemptSettlement,
+    nowMs: number,
+  ): void {
+    bucket.inFlight = Math.max(0, bucket.inFlight - 1);
+
+    if (outcome === 'success') {
+      bucket.failures = 0;
+      bucket.blockedUntilMs = 0;
+      bucket.windowStartedAtMs = nowMs;
+      if (bucket.inFlight === 0) {
+        this.buckets.delete(key);
+      }
+      return;
+    }
+
+    if (outcome === 'error') {
+      const blockExpired = bucket.blockedUntilMs <= nowMs;
+      const windowExpired = nowMs - bucket.windowStartedAtMs >= this.windowMs;
+      if (bucket.inFlight === 0 && (bucket.failures === 0 || (blockExpired && windowExpired))) {
+        this.buckets.delete(key);
+      }
+      return;
+    }
+
+    const blockExpired = bucket.blockedUntilMs > 0 && bucket.blockedUntilMs <= nowMs;
+    const windowExpired =
+      bucket.blockedUntilMs <= nowMs && nowMs - bucket.windowStartedAtMs >= this.windowMs;
+    if (blockExpired || windowExpired) {
+      bucket.failures = 1;
+      bucket.blockedUntilMs = 0;
+      bucket.windowStartedAtMs = nowMs;
+    } else {
+      bucket.failures += 1;
+    }
+
+    if (bucket.failures >= this.maxAttempts) {
+      bucket.blockedUntilMs = Math.max(bucket.blockedUntilMs, nowMs + this.blockMs);
+    }
+
+    this.buckets.delete(key);
+    this.buckets.set(key, bucket);
   }
 
   private normalizeKey(rawClientIp: string): string {
@@ -92,19 +150,27 @@ export class LoginThrottlerService {
     }
 
     for (const [k, v] of this.buckets.entries()) {
-      const expiredWindow = nowMs - v.windowStartedAtMs >= this.windowMs;
       const expiredBlock = v.blockedUntilMs <= nowMs;
-      if (expiredWindow && expiredBlock) {
+      const expiredWindow = nowMs - v.windowStartedAtMs >= this.windowMs;
+      const expiredPenalty = v.blockedUntilMs > 0 && expiredBlock;
+      if (v.inFlight === 0 && (expiredPenalty || (expiredWindow && expiredBlock))) {
         this.buckets.delete(k);
       }
     }
 
-    while (this.buckets.size >= this.maxKeys) {
-      const oldestKey = this.buckets.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
+    if (this.buckets.size >= this.maxKeys) {
+      for (const [k, v] of this.buckets.entries()) {
+        if (this.buckets.size < this.maxKeys) {
+          break;
+        }
+        if (v.inFlight === 0) {
+          this.buckets.delete(k);
+        }
       }
-      this.buckets.delete(oldestKey);
+    }
+
+    if (this.buckets.size >= this.maxKeys) {
+      throw new LoginThrottledException(this.inFlightRetryAfterSeconds);
     }
   }
 }

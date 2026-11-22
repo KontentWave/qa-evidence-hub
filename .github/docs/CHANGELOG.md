@@ -4,7 +4,13 @@ All notable changes to QA Evidence Hub are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0 versions (`0.x.y`) reflect active Phase 1 development on synthetic data only; real client data remains unauthorized until `F03`–`F04` and the section 8 production audit verdict pass in `P1-13`.
 
-## [0.3.0] - 2026-11-21
+## [0.3.0] - 2026-11-22
+
+### Security & Fixed (`P1-03` Review Hardening)
+
+- Serialized `AuthService.login` session mutations with `scripts/provision-owner.ts reset-password` (`apps/api/src/auth/auth.service.ts`, `apps/api/test/auth-api.integration.spec.ts`): kept expensive `scrypt` verification outside the database transaction, acquired `SELECT ... FROM "owners" WHERE "singleton_key" = true FOR UPDATE` before mutating sessions, compared the locked row's `password_hash` with the verified hash (returning generic `401` with zero cookies if rotated), and held the row lock through prior-session revocation, `20`-session cap eviction, and new session insertion.
+- Counted in-flight per-IP login reservations alongside recorded failures against `AUTH_LOGIN_MAX_ATTEMPTS` before any asynchronous owner lookup or `scrypt` verification (`apps/api/src/auth/login-throttler.service.ts`, `apps/api/src/auth/auth.service.ts`), settling each reservation once on `success`, `invalid_credentials`, or `error` while preserving active reservations across concurrent successes and bounded `maxKeys` bucket eviction.
+- Aligned `AUTH_PASSWORD_SCRYPT_LN` validation and runtime bounds (`apps/api/src/config/env.validation.ts`, `apps/api/src/auth/password-hasher.service.ts`, `scripts/f01-containers.test.mjs`, `.env.example`) with the `128 MiB` per-hash `scrypt` limit on Node `24.22.3`: kept default `16`, accepted `14`–`16`, rejected `17` and `18` at startup validation with a clear configuration error, and preserved stored-parameter verification for CLI-provisioned PHC hashes.
 
 ### Added (`P1-03` — Single-owner authentication, session boundary, and CSRF protection)
 

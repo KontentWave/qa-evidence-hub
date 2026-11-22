@@ -39,6 +39,13 @@ export interface LoginSuccessResult {
 const STALE_EXPIRED_PURGE_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_ACTIVE_SESSIONS_PER_OWNER = 20;
 
+class StaleOwnerCredentialsError extends Error {
+  constructor() {
+    super('Owner credentials changed before session creation.');
+    this.name = 'StaleOwnerCredentialsError';
+  }
+}
+
 export function hashSessionTokenDigest(rawToken: string): string {
   return crypto.createHash('sha256').update(rawToken, 'utf8').digest('hex');
 }
@@ -132,115 +139,153 @@ export class AuthService {
     readonly previousSessionToken?: string;
     readonly now?: Date;
   }): Promise<LoginSuccessResult> {
-    const now = input.now ?? new Date();
-    const nowMs = now.getTime();
+    const initialNow = input.now ?? new Date();
+    const reservation = this.loginThrottler.reserveAttempt(input.clientIp, initialNow.getTime());
 
-    this.loginThrottler.assertAllowed(input.clientIp, nowMs);
+    try {
+      const normalizedLogin = input.loginIdentifier.trim();
+      const owner = await this.prismaService.client.owner.findFirst({
+        where: { singletonKey: true },
+      });
 
-    const normalizedLogin = input.loginIdentifier.trim();
-    const owner = await this.prismaService.client.owner.findFirst({
-      where: { singletonKey: true },
-    });
+      const verifiedPasswordHash =
+        owner !== null && owner.loginIdentifier.toLowerCase() === normalizedLogin.toLowerCase()
+          ? owner.passwordHash
+          : null;
 
-    const identifierMatches =
-      owner !== null && owner.loginIdentifier.toLowerCase() === normalizedLogin.toLowerCase();
+      const passwordValid = await this.passwordHasher.verifyOrEqualize(
+        input.password,
+        verifiedPasswordHash,
+      );
 
-    const passwordValid = await this.passwordHasher.verifyOrEqualize(
-      input.password,
-      identifierMatches ? owner.passwordHash : null,
-    );
+      if (!owner || verifiedPasswordHash === null || !passwordValid) {
+        const failNowMs = input.now ? input.now.getTime() : Date.now();
+        reservation.settle('invalid_credentials', failNowMs);
+        throw new UnauthorizedException();
+      }
 
-    if (!owner || !identifierMatches || !passwordValid) {
-      this.loginThrottler.recordFailure(input.clientIp, nowMs);
-      throw new UnauthorizedException();
+      const rawSessionToken = this.csrfService.generateOpaqueToken();
+      const tokenDigest = hashSessionTokenDigest(rawSessionToken);
+      const csrfSalt = crypto.randomBytes(32).toString('hex');
+      const sessionId = crypto.randomUUID();
+
+      const previousDigest = this.csrfService.isValidOpaqueToken(input.previousSessionToken)
+        ? hashSessionTokenDigest(input.previousSessionToken)
+        : null;
+
+      const committedOwner = await this.prismaService.client.$transaction(async (tx) => {
+        const lockedRows = await tx.$queryRaw<
+          Array<{
+            id: string;
+            login_identifier: string;
+            password_hash: string;
+            timezone: string;
+          }>
+        >`SELECT "id", "login_identifier", "password_hash", "timezone" FROM "owners" WHERE "singleton_key" = true FOR UPDATE`;
+
+        const lockedOwner = lockedRows[0];
+        if (
+          !lockedOwner ||
+          lockedOwner.id !== owner.id ||
+          lockedOwner.login_identifier.toLowerCase() !== normalizedLogin.toLowerCase() ||
+          lockedOwner.password_hash !== verifiedPasswordHash
+        ) {
+          throw new StaleOwnerCredentialsError();
+        }
+
+        const txNow = input.now ?? new Date();
+        const txNowMs = txNow.getTime();
+        const expiresAt = new Date(txNowMs + this.sessionTtlSeconds * 1000);
+        const staleCutoff = new Date(txNowMs - STALE_EXPIRED_PURGE_AGE_MS);
+
+        if (previousDigest) {
+          await tx.authSession.updateMany({
+            where: {
+              tokenDigest: previousDigest,
+              revokedAt: null,
+            },
+            data: {
+              revokedAt: txNow,
+              revokeReason: 'reauthenticated',
+            },
+          });
+        }
+
+        await tx.authSession.deleteMany({
+          where: {
+            expiresAt: { lt: staleCutoff },
+          },
+        });
+
+        const activeExisting = await tx.authSession.findMany({
+          where: {
+            ownerId: lockedOwner.id,
+            revokedAt: null,
+            expiresAt: { gt: txNow },
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          select: { id: true },
+        });
+
+        const overflowCount = activeExisting.length - (MAX_ACTIVE_SESSIONS_PER_OWNER - 1);
+        if (overflowCount > 0) {
+          const idsToEvict = activeExisting.slice(0, overflowCount).map((row) => row.id);
+          await tx.authSession.updateMany({
+            where: {
+              id: { in: idsToEvict },
+              revokedAt: null,
+            },
+            data: {
+              revokedAt: txNow,
+              revokeReason: 'session_cap_evicted',
+            },
+          });
+        }
+
+        await tx.authSession.create({
+          data: {
+            id: sessionId,
+            ownerId: lockedOwner.id,
+            tokenDigest,
+            csrfSalt,
+            createdAt: txNow,
+            expiresAt,
+          },
+        });
+
+        return {
+          id: lockedOwner.id,
+          loginIdentifier: lockedOwner.login_identifier,
+          timezone: lockedOwner.timezone,
+        };
+      });
+
+      const successNowMs = input.now ? input.now.getTime() : Date.now();
+      reservation.settle('success', successNowMs);
+
+      const csrfToken = this.csrfService.computeAuthenticatedToken(
+        rawSessionToken,
+        sessionId,
+        csrfSalt,
+      );
+
+      return {
+        owner: committedOwner,
+        rawSessionToken,
+        sessionTtlSeconds: this.sessionTtlSeconds,
+        csrfToken,
+      };
+    } catch (error: unknown) {
+      const settleNowMs = input.now ? input.now.getTime() : Date.now();
+      if (error instanceof StaleOwnerCredentialsError) {
+        reservation.settle('invalid_credentials', settleNowMs);
+        throw new UnauthorizedException();
+      }
+      if (!reservation.isSettled) {
+        reservation.settle('error', settleNowMs);
+      }
+      throw error;
     }
-
-    this.loginThrottler.resetKey(input.clientIp);
-
-    const rawSessionToken = this.csrfService.generateOpaqueToken();
-    const tokenDigest = hashSessionTokenDigest(rawSessionToken);
-    const csrfSalt = crypto.randomBytes(32).toString('hex');
-    const sessionId = crypto.randomUUID();
-    const expiresAt = new Date(nowMs + this.sessionTtlSeconds * 1000);
-    const staleCutoff = new Date(nowMs - STALE_EXPIRED_PURGE_AGE_MS);
-
-    const previousDigest = this.csrfService.isValidOpaqueToken(input.previousSessionToken)
-      ? hashSessionTokenDigest(input.previousSessionToken)
-      : null;
-
-    await this.prismaService.client.$transaction(async (tx) => {
-      if (previousDigest) {
-        await tx.authSession.updateMany({
-          where: {
-            tokenDigest: previousDigest,
-            revokedAt: null,
-          },
-          data: {
-            revokedAt: now,
-            revokeReason: 'reauthenticated',
-          },
-        });
-      }
-
-      await tx.authSession.deleteMany({
-        where: {
-          expiresAt: { lt: staleCutoff },
-        },
-      });
-
-      const activeExisting = await tx.authSession.findMany({
-        where: {
-          ownerId: owner.id,
-          revokedAt: null,
-          expiresAt: { gt: now },
-        },
-        orderBy: { createdAt: 'asc' },
-        select: { id: true },
-      });
-
-      const overflowCount = activeExisting.length - (MAX_ACTIVE_SESSIONS_PER_OWNER - 1);
-      if (overflowCount > 0) {
-        const idsToEvict = activeExisting.slice(0, overflowCount).map((row) => row.id);
-        await tx.authSession.updateMany({
-          where: {
-            id: { in: idsToEvict },
-            revokedAt: null,
-          },
-          data: {
-            revokedAt: now,
-            revokeReason: 'session_cap_evicted',
-          },
-        });
-      }
-
-      await tx.authSession.create({
-        data: {
-          id: sessionId,
-          ownerId: owner.id,
-          tokenDigest,
-          csrfSalt,
-          createdAt: now,
-          expiresAt,
-        },
-      });
-    });
-
-    const csrfToken = this.csrfService.computeAuthenticatedToken(
-      rawSessionToken,
-      sessionId,
-      csrfSalt,
-    );
-
-    return {
-      owner: {
-        id: owner.id,
-        loginIdentifier: owner.loginIdentifier,
-        timezone: owner.timezone,
-      },
-      rawSessionToken,
-      sessionTtlSeconds: this.sessionTtlSeconds,
-      csrfToken,
-    };
   }
 
   public getSessionView(actor: AuthenticatedActor | undefined): {

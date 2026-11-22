@@ -119,7 +119,8 @@ QA Evidence Hub enforces **strictly one owner account** in Phase 1 (`owners.sing
 
 - **Never pass passwords on the command line:** `--password` and `-p` flags are explicitly rejected so credentials never appear in `ps` process listings or shell history.
 - **Accepted password channels:** Interactive hidden TTY prompt (echo disabled, double-entry confirmation) or `--password-stdin` (single-line stdin pipe, e.g., from an operator password manager or protected root/owner secret file).
-- **Password policy & adaptive KDF:** Minimum `12` characters (maximum `256` characters / `1,024` UTF-8 bytes), non-whitespace, no ASCII control characters, and distinct from `--login`. Hashed using salted OpenSSL/Node `scrypt` (`$scrypt$ln=16,r=8,p=1$<salt>$<hash>`, `N = 65,536`, `16`-byte CSPRNG salt, `64`-byte key).
+- **Password policy & adaptive KDF:** Minimum `12` characters (maximum `256` characters / `1,024` UTF-8 bytes), non-whitespace, no ASCII control characters, and distinct from `--login`. Hashed using salted OpenSSL/Node `scrypt` (`$scrypt$ln=16,r=8,p=1$<salt>$<hash>`, `N = 65,536`, `16`-byte CSPRNG salt, `64`-byte key, `128 MiB` per-hash `maxmem`). In `apps/api`, `AUTH_PASSWORD_SCRYPT_LN` defaults to `16`, accepts `14`–`16`, and rejects `17` and `18` during startup environment validation; existing CLI-provisioned PHC hashes always verify using their stored `ln,r,p` parameters.
+- **Per-IP login admission & in-flight throttling:** Before any database owner lookup or `scrypt` check, `LoginThrottlerService` reserves a per-IP attempt and enforces `failures + inFlight < AUTH_LOGIN_MAX_ATTEMPTS` (returning `429` with `Retry-After` when blocked or saturated), settling each reservation exactly once on `success`, `invalid_credentials`, or `error` while preserving concurrent reservations across successes and `AUTH_THROTTLE_MAX_KEYS` bucket evictions.
 - **Zero-secret logging:** `scripts/provision-owner.ts` and `apps/api` never write raw passwords, password hashes, session cookies, session digests, CSRF tokens, or `DATABASE_URL` credentials to stdout, stderr, or container logs.
 
 ### Initial Single-Owner Provisioning
@@ -168,7 +169,8 @@ secret-tool lookup service qaeh-owner-rotated | docker compose exec -T api \
 ```
 
 - Optional `--login` verifies that the operator is targeting the expected provisioned owner identifier before rotating credentials; mismatches abort and roll back.
-- Immediately after `reset-password` completes, any previously issued browser `qaeh_session` cookie is rejected (`401` on API routes and `307 -> /login` on Next.js SSR pages).
+- `AuthService.login` keeps `scrypt` verification outside the database transaction and locks the same singleton `owners` row (`SELECT ... FROM "owners" WHERE "singleton_key" = true FOR UPDATE`) inside its session transaction, verifying the locked `password_hash` still matches the verified hash before revoking prior sessions, evicting oldest sessions above the `20`-session cap, or inserting a new session (returning generic `401` with no cookie if `reset-password` rotated the hash first).
+- Immediately after `reset-password` commits, every session authorized by the old password is revoked and unusable (`401` on API routes and `307 -> /login` on Next.js SSR pages), and only the rotated password can establish new sessions.
 
 ---
 
