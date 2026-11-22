@@ -1,6 +1,7 @@
 import { Controller, Get, Header, HttpStatus, Inject, Query, Res } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { PublicHealth } from '../auth/auth.decorators';
 import {
   EmptyQueryDto,
   LivenessResponseDto,
@@ -10,6 +11,7 @@ import {
 import { HealthService } from './health.service';
 
 @ApiTags('health')
+@PublicHealth()
 @Controller('health')
 export class HealthController {
   constructor(@Inject(HealthService) private readonly healthService: HealthService) {}

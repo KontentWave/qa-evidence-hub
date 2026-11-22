@@ -107,10 +107,12 @@ test('isolates two concurrent TEST_RUN_ID instances, resets clean state, and tea
     assert.equal(probeAfter.rows[0].table_exists, null, 'reset must clear prior test tables');
 
     const migrationsAfter = await clientAfterReset.query(
-      'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL;',
+      'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL ORDER BY migration_name;',
     );
-    assert.equal(migrationsAfter.rows.length, 1);
-    assert.match(migrationsAfter.rows[0].migration_name, /_baseline$/);
+    assert.deepEqual(
+      migrationsAfter.rows.map((r) => r.migration_name),
+      ['20261118000000_baseline', '20261121000000_owner_and_auth_sessions'],
+    );
   } finally {
     await clientAfterReset.end();
   }

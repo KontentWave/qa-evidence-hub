@@ -6,6 +6,12 @@ export type { components, paths };
 export type LivenessResponse = components['schemas']['LivenessResponseDto'];
 export type ReadinessOkResponse = components['schemas']['ReadinessOkResponseDto'];
 export type ReadinessUnavailableResponse = components['schemas']['ReadinessUnavailableResponseDto'];
+export type CsrfTokenResponse = components['schemas']['CsrfTokenResponseDto'];
+export type LoginRequest = components['schemas']['LoginRequestDto'];
+export type LoginResponse = components['schemas']['LoginResponseDto'];
+export type OwnerSummary = components['schemas']['OwnerSummaryDto'];
+export type SessionStatusResponse = components['schemas']['SessionStatusResponseDto'];
+export type LogoutResponse = components['schemas']['LogoutResponseDto'];
 
 export interface CreateApiClientOptions {
   readonly baseUrl: string;

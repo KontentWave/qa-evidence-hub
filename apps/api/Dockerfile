@@ -36,6 +36,7 @@ COPY --from=builder --chown=node:node /workspace/apps/api/node_modules ./apps/ap
 COPY --from=builder --chown=node:node /workspace/apps/api/package.json ./apps/api/package.json
 COPY --from=builder --chown=node:node /workspace/apps/api/dist ./apps/api/dist
 COPY --from=builder --chown=node:node /workspace/apps/api/prisma ./apps/api/prisma
+COPY --chown=node:node scripts/provision-owner.ts ./scripts/provision-owner.ts
 
 USER node
 WORKDIR /app/apps/api

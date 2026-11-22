@@ -18,7 +18,8 @@ describe('API PostgreSQL readiness and baseline migration integration', () => {
       DATABASE_POOL_MAX: '5',
       POSTGRES_MAX_CONNECTIONS: '30',
       DATABASE_STATEMENT_TIMEOUT_MS: '5000',
-      TRUST_PROXY: '1',
+      TRUST_PROXY: '127.0.0.1/32,::1/128',
+      APP_ORIGIN: 'http://127.0.0.1:8080',
     });
     databaseUrl = env.databaseUrl;
 
@@ -37,7 +38,7 @@ describe('API PostgreSQL readiness and baseline migration integration', () => {
     }
   });
 
-  it('initializes _prisma_migrations cleanly with zero permanent business or dummy tables', async () => {
+  it('applies baseline and P1-03 owner/auth_sessions migrations cleanly with no out-of-slice domain tables', async () => {
     const client = new pg.Client({ connectionString: databaseUrl });
     await client.connect();
 
@@ -45,11 +46,15 @@ describe('API PostgreSQL readiness and baseline migration integration', () => {
       const migrations = await client.query<{
         migration_name: string;
         finished_at: Date | null;
-      }>('SELECT migration_name, finished_at FROM "_prisma_migrations";');
+      }>('SELECT migration_name, finished_at FROM "_prisma_migrations" ORDER BY migration_name;');
 
-      expect(migrations.rows).toHaveLength(1);
-      expect(migrations.rows[0]?.migration_name).toBe('20261118000000_baseline');
-      expect(migrations.rows[0]?.finished_at).not.toBeNull();
+      expect(migrations.rows.map((r) => r.migration_name)).toEqual([
+        '20261118000000_baseline',
+        '20261121000000_owner_and_auth_sessions',
+      ]);
+      for (const row of migrations.rows) {
+        expect(row.finished_at).not.toBeNull();
+      }
 
       const publicTables = await client.query<{ table_name: string }>(
         `SELECT table_name
@@ -58,7 +63,11 @@ describe('API PostgreSQL readiness and baseline migration integration', () => {
          ORDER BY table_name;`,
       );
 
-      expect(publicTables.rows.map((r) => r.table_name)).toEqual(['_prisma_migrations']);
+      expect(publicTables.rows.map((r) => r.table_name)).toEqual([
+        '_prisma_migrations',
+        'auth_sessions',
+        'owners',
+      ]);
     } finally {
       await client.end();
     }

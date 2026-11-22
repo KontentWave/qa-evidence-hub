@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import https from 'node:https';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +32,96 @@ async function getFreePort() {
 
 function formatMiB(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function execWithStdin(cmd, args, stdinText, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      ...options,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Command ${cmd} exited with ${code}: ${stderr || stdout}`));
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+    child.stdin.end(stdinText);
+  });
+}
+
+function getSetCookieHeaders(headers) {
+  if (typeof headers.getSetCookie === 'function') {
+    return headers.getSetCookie();
+  }
+  const single = headers.get('set-cookie');
+  return single ? [single] : [];
+}
+
+function applySetCookiesToJar(jar, setCookieList) {
+  for (const raw of setCookieList) {
+    const [pair, ...attrs] = raw.split(';').map((s) => s.trim());
+    if (!pair) continue;
+    const eq = pair.indexOf('=');
+    if (eq <= 0) continue;
+    const name = pair.slice(0, eq);
+    const val = pair.slice(eq + 1);
+    if (val === '' || attrs.some((a) => /^max-age=0$/i.test(a))) {
+      jar.delete(name);
+    } else {
+      jar.set(name, val);
+    }
+  }
+}
+
+function formatCookieJar(jar) {
+  return [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
+function httpsRequestWithCa(urlString, { method = 'GET', headers = {}, body, ca }) {
+  const url = new URL(urlString);
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port,
+        path: `${url.pathname}${url.search}`,
+        method,
+        headers,
+        ca,
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          const rawSetCookie = res.headers['set-cookie'] ?? [];
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            setCookies: Array.isArray(rawSetCookie) ? rawSetCookie : [rawSetCookie],
+            text,
+          });
+        });
+      },
+    );
+    req.on('error', reject);
+    if (body !== undefined) {
+      req.write(body);
+    }
+    req.end();
+  });
 }
 
 async function listProjectDockerResources(project) {
@@ -62,12 +155,17 @@ test(
     const webTag = prebuiltWeb || `qaeh-f01-web:${runId}`;
     const probeContainerName = `${project}_header_probe`;
     const nginxPort = await getFreePort();
+    const nginxHttpsPort = await getFreePort();
     const pgUser = 'qaeh_f01_user';
     const pgPassword = `qaeh_f01_pw_${runId}`;
     const pgDb = 'qaeh_f01_db';
+    const ownerLogin = `owner.${runId}@synthetic.invalid`;
+    const ownerPassword = `SyntheticF01Pass!2026#${runId}`;
+    const tlsTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `qaeh-f01-tls-${runId}-`));
 
     let apiImageId = '';
     let webImageId = '';
+    let currentAppOrigin = `http://127.0.0.1:${nginxPort}`;
 
     const composeEnv = () => ({
       ...process.env,
@@ -80,14 +178,28 @@ test(
       WEB_IMAGE: webImageId,
       NGINX_BIND_ADDRESS: '127.0.0.1',
       NGINX_HTTP_PORT: String(nginxPort),
+      APP_ORIGIN: currentAppOrigin,
+      TRUST_PROXY: 'nginx',
     });
 
-    const compose = (args) =>
-      execFileAsync('docker', ['compose', '-p', project, '-f', composeFile, ...args], {
-        cwd: repoRoot,
-        env: composeEnv(),
-        maxBuffer: 20 * 1024 * 1024,
-      });
+    const compose = (args, extraFiles = []) =>
+      execFileAsync(
+        'docker',
+        [
+          'compose',
+          '-p',
+          project,
+          '-f',
+          composeFile,
+          ...extraFiles.flatMap((f) => ['-f', f]),
+          ...args,
+        ],
+        {
+          cwd: repoRoot,
+          env: composeEnv(),
+          maxBuffer: 20 * 1024 * 1024,
+        },
+      );
 
     t.after(async () => {
       await execFileAsync('docker', ['rm', '-f', probeContainerName]).catch(() => undefined);
@@ -106,6 +218,7 @@ test(
       if (!usingPrebuilt) {
         await execFileAsync('docker', ['rmi', '-f', apiTag, webTag]).catch(() => undefined);
       }
+      await fs.rm(tlsTmpDir, { recursive: true, force: true }).catch(() => undefined);
     });
 
     // 1. Build production API and Web images from Dockerfiles (unless prebuilt image refs are supplied).
@@ -199,7 +312,167 @@ test(
     const nginxPorts = JSON.parse(nginxPortsOut.stdout.trim());
     assert.equal(nginxPorts['80/tcp']?.[0]?.HostPort, String(nginxPort));
 
-    // 5. Verify single-origin routing, security headers, and static asset serving through Nginx.
+    // 5. Apply Prisma migrations on internal data_net and provision synthetic single owner via operator CLI.
+    const dataNetworkName = `${project}_data_net`;
+    const internalDbUrl = `postgresql://${pgUser}:${pgPassword}@postgres:5432/${pgDb}?schema=public`;
+    await execFileAsync(
+      'docker',
+      [
+        'run',
+        '--rm',
+        '--network',
+        dataNetworkName,
+        '-v',
+        `${repoRoot}:/workspace:ro`,
+        '-w',
+        '/workspace/apps/api',
+        '-e',
+        `DATABASE_URL=${internalDbUrl}`,
+        '-e',
+        'HOME=/tmp',
+        '-e',
+        'JITI_FS_CACHE=0',
+        apiImageId,
+        './node_modules/.bin/prisma',
+        'migrate',
+        'deploy',
+      ],
+      { cwd: repoRoot, maxBuffer: 20 * 1024 * 1024 },
+    );
+
+    const provisionOut = await execWithStdin(
+      'docker',
+      [
+        'compose',
+        '-p',
+        project,
+        '-f',
+        composeFile,
+        'exec',
+        '-T',
+        'api',
+        'node',
+        '/app/scripts/provision-owner.ts',
+        'provision',
+        '--login',
+        ownerLogin,
+        '--password-stdin',
+      ],
+      `${ownerPassword}\n`,
+      { cwd: repoRoot, env: composeEnv() },
+    );
+    assert.doesNotMatch(`${provisionOut.stdout}\n${provisionOut.stderr}`, new RegExp(ownerPassword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+    // 5b. On Node 24.22.3 (production API image), verify AUTH_PASSWORD_SCRYPT_LN=17 and 18 fail validation cleanly,
+    // while upper bound 16 initializes the API and verifies both fresh ln=16 hashes and CLI-provisioned hashes (including under ln=14).
+    const apiNodeVersionOut = await execFileAsync('docker', ['run', '--rm', apiImageId, 'node', '--version']);
+    assert.equal(apiNodeVersionOut.stdout.trim(), 'v24.22.3');
+
+    for (const rejectedLn of ['17', '18']) {
+      let rejectedExit = 0;
+      let rejectedOutput = '';
+      try {
+        await execFileAsync('docker', [
+          'run',
+          '--rm',
+          '-e',
+          'NODE_ENV=production',
+          '-e',
+          'APP_ORIGIN=http://127.0.0.1:8080',
+          '-e',
+          `DATABASE_URL=${internalDbUrl}`,
+          '-e',
+          'TRUST_PROXY=nginx',
+          '-e',
+          `AUTH_PASSWORD_SCRYPT_LN=${rejectedLn}`,
+          apiImageId,
+          'node',
+          'dist/main.js',
+        ]);
+      } catch (err) {
+        rejectedExit = err.code ?? 1;
+        rejectedOutput = `${err.stdout ?? ''}\n${err.stderr ?? ''}`;
+      }
+      assert.notEqual(rejectedExit, 0, `Expected AUTH_PASSWORD_SCRYPT_LN=${rejectedLn} to exit non-zero`);
+      assert.match(rejectedOutput, /AUTH_PASSWORD_SCRYPT_LN.*14.*16/);
+      assert.doesNotMatch(rejectedOutput, /memory limit exceeded/i);
+    }
+
+    const scryptRuntimeProbeScript = [
+      'require("reflect-metadata");',
+      'const assert = require("node:assert/strict");',
+      'const { NestFactory } = require("@nestjs/core");',
+      'const { AppModule } = require("./dist/app.module");',
+      'const { configureApp } = require("./dist/app.setup");',
+      'const { validateApiEnv } = require("./dist/config/env.validation");',
+      'const { PasswordHasherService } = require("./dist/auth/password-hasher.service");',
+      'const { AuthService } = require("./dist/auth/auth.service");',
+      'const { PrismaService } = require("./dist/prisma/prisma.service");',
+      '(async () => {',
+      '  assert.equal(process.version, "v24.22.3");',
+      '  const baseRaw = {',
+      '    NODE_ENV: "production",',
+      '    APP_ORIGIN: "http://127.0.0.1:8080",',
+      '    DATABASE_URL: process.env.DATABASE_URL,',
+      '    TRUST_PROXY: "nginx",',
+      '  };',
+      '  const env16 = validateApiEnv({ ...baseRaw, AUTH_PASSWORD_SCRYPT_LN: "16" });',
+      '  const app16 = await NestFactory.create(AppModule.register(env16), { logger: false });',
+      '  configureApp(app16, env16, { mountSwaggerUi: false });',
+      '  await app16.init();',
+      '  try {',
+      '    const hasher16 = app16.get(PasswordHasherService);',
+      '    const sampleHash = await hasher16.hashPassword("SyntheticUpperBound!2026#Node24223");',
+      '    assert.match(sampleHash, /^\\$scrypt\\$ln=16,r=8,p=1\\$/);',
+      '    assert.equal(await hasher16.verifyPassword("SyntheticUpperBound!2026#Node24223", sampleHash), true);',
+      '    const login16 = await app16.get(AuthService).login({',
+      '      loginIdentifier: process.env.OWNER_LOGIN,',
+      '      password: process.env.OWNER_PASSWORD,',
+      '      clientIp: "198.51.100.70",',
+      '    });',
+      '    assert.equal(login16.owner.loginIdentifier, process.env.OWNER_LOGIN);',
+      '  } finally {',
+      '    await app16.close();',
+      '  }',
+      '  const env14 = validateApiEnv({ ...baseRaw, AUTH_PASSWORD_SCRYPT_LN: "14" });',
+      '  const app14 = await NestFactory.create(AppModule.register(env14), { logger: false });',
+      '  configureApp(app14, env14, { mountSwaggerUi: false });',
+      '  await app14.init();',
+      '  try {',
+      '    const login14 = await app14.get(AuthService).login({',
+      '      loginIdentifier: process.env.OWNER_LOGIN,',
+      '      password: process.env.OWNER_PASSWORD,',
+      '      clientIp: "198.51.100.71",',
+      '    });',
+      '    assert.equal(login14.owner.loginIdentifier, process.env.OWNER_LOGIN);',
+      '    await app14.get(PrismaService).client.authSession.deleteMany({});',
+      '  } finally {',
+      '    await app14.close();',
+      '  }',
+      '})().catch((err) => {',
+      '  console.error(err);',
+      '  process.exit(1);',
+      '});',
+    ].join('\n');
+
+    await execFileAsync('docker', [
+      'run',
+      '--rm',
+      '--network',
+      dataNetworkName,
+      '-e',
+      `DATABASE_URL=${internalDbUrl}`,
+      '-e',
+      `OWNER_LOGIN=${ownerLogin}`,
+      '-e',
+      `OWNER_PASSWORD=${ownerPassword}`,
+      apiImageId,
+      'node',
+      '-e',
+      scryptRuntimeProbeScript,
+    ]);
+
+    // 6. Verify single-origin routing, anonymous denial, login/Ready/logout boundary, and static assets via Nginx.
     const baseOrigin = `http://127.0.0.1:${nginxPort}`;
 
     const healthRes = await fetch(`${baseOrigin}/api/v1/health`);
@@ -215,18 +488,36 @@ test(
     assert.equal(readyRes.headers.get('cache-control'), 'no-store');
     assert.equal(readyRes.headers.get('x-content-type-options'), 'nosniff');
 
-    const rootRes = await fetch(`${baseOrigin}/`);
-    assert.equal(rootRes.status, 200);
-    assert.match(rootRes.headers.get('content-type') ?? '', /text\/html/i);
-    assert.equal(rootRes.headers.get('cache-control'), 'private, no-store, no-transform');
-    assert.equal(rootRes.headers.get('x-content-type-options'), 'nosniff');
-    const rootHtml = await rootRes.text();
-    assert.match(rootHtml, /<html[^>]*lang="en"/i);
-    assert.match(rootHtml, /<main[^>]*id="main-content"/i);
-    assert.match(rootHtml, /<h1>QA Evidence Hub<\/h1>/);
-    assert.match(rootHtml, /System status:\s*(?:<!-- -->)?Ready/);
+    const anonSessionRes = await fetch(`${baseOrigin}/api/v1/auth/session`);
+    assert.equal(anonSessionRes.status, 401);
+    assert.match(anonSessionRes.headers.get('cache-control') ?? '', /private/);
+    assert.match(anonSessionRes.headers.get('cache-control') ?? '', /no-store/);
 
-    const staticAssetMatch = /\/_next\/static\/[^"'<>\\\s)]+/.exec(rootHtml);
+    // Anonymous GET / must redirect to /login without protected Ready content or Set-Cookie.
+    const anonRootRes = await fetch(`${baseOrigin}/`, { redirect: 'manual' });
+    assert.ok(
+      anonRootRes.status === 307 || anonRootRes.status === 302 || anonRootRes.status === 303,
+      `Expected anonymous / to redirect to /login, got ${anonRootRes.status}`,
+    );
+    assert.match(anonRootRes.headers.get('location') ?? '', /\/login$/);
+    assert.equal(anonRootRes.headers.get('cache-control'), 'private, no-store, no-transform');
+    assert.equal(anonRootRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(getSetCookieHeaders(anonRootRes.headers).length, 0);
+    const anonRootBody = await anonRootRes.text();
+    assert.doesNotMatch(anonRootBody, /System status:\s*(?:<!-- -->)?Ready/);
+
+    const loginPageRes = await fetch(`${baseOrigin}/login`);
+    assert.equal(loginPageRes.status, 200);
+    assert.match(loginPageRes.headers.get('content-type') ?? '', /text\/html/i);
+    assert.equal(loginPageRes.headers.get('cache-control'), 'private, no-store, no-transform');
+    assert.equal(loginPageRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(getSetCookieHeaders(loginPageRes.headers).length, 0);
+    const loginHtml = await loginPageRes.text();
+    assert.match(loginHtml, /<html[^>]*lang="en"/i);
+    assert.match(loginHtml, /<main[^>]*id="main-content"/i);
+    assert.match(loginHtml, /Sign in to QA Evidence Hub/);
+
+    const staticAssetMatch = /\/_next\/static\/[^"'<>\\\s)]+/.exec(loginHtml);
     assert.ok(staticAssetMatch, 'Expected Next.js HTML to reference at least one /_next/static/* asset');
     const staticRes = await fetch(`${baseOrigin}${staticAssetMatch[0]}`);
     assert.equal(staticRes.status, 200);
@@ -234,6 +525,75 @@ test(
     assert.equal(staticRes.headers.get('x-content-type-options'), 'nosniff');
     const staticBytes = await staticRes.arrayBuffer();
     assert.ok(staticBytes.byteLength > 0);
+
+    // Sign in as provisioned owner through Nginx, verify Ready on / with read-only SSR, then sign out.
+    const cookieJar = new Map();
+    const csrfRes = await fetch(`${baseOrigin}/api/v1/auth/csrf`);
+    assert.equal(csrfRes.status, 200);
+    applySetCookiesToJar(cookieJar, getSetCookieHeaders(csrfRes.headers));
+    const { csrfToken: preLoginCsrf } = await csrfRes.json();
+
+    const loginApiRes = await fetch(`${baseOrigin}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: baseOrigin,
+        cookie: formatCookieJar(cookieJar),
+        'x-csrf-token': preLoginCsrf,
+      },
+      body: JSON.stringify({ loginIdentifier: ownerLogin, password: ownerPassword }),
+    });
+    assert.equal(loginApiRes.status, 200);
+    const loginSetCookies = getSetCookieHeaders(loginApiRes.headers);
+    const sessionSetCookie = loginSetCookies.find((c) => c.startsWith('qaeh_session='));
+    assert.ok(sessionSetCookie, 'Expected qaeh_session Set-Cookie on login');
+    assert.match(sessionSetCookie, /;\s*HttpOnly/i);
+    assert.match(sessionSetCookie, /;\s*Secure/i);
+    assert.match(sessionSetCookie, /;\s*SameSite=Lax/i);
+    assert.match(sessionSetCookie, /;\s*Path=\//i);
+    assert.doesNotMatch(sessionSetCookie, /;\s*Domain=/i);
+    applySetCookiesToJar(cookieJar, loginSetCookies);
+    const { csrfToken: authCsrf } = await loginApiRes.json();
+    const activeSessionToken = cookieJar.get('qaeh_session');
+    assert.ok(activeSessionToken);
+
+    const authedRootRes = await fetch(`${baseOrigin}/`, {
+      redirect: 'manual',
+      headers: { cookie: `qaeh_session=${activeSessionToken}` },
+    });
+    assert.equal(authedRootRes.status, 200);
+    assert.equal(authedRootRes.headers.get('cache-control'), 'private, no-store, no-transform');
+    assert.equal(authedRootRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(
+      getSetCookieHeaders(authedRootRes.headers).length,
+      0,
+      'SSR read on / must emit zero Set-Cookie headers',
+    );
+    const rootHtml = await authedRootRes.text();
+    assert.match(rootHtml, /<h1>QA Evidence Hub<\/h1>/);
+    assert.match(rootHtml, /System status:\s*(?:<!-- -->)?Ready/);
+    assert.ok(rootHtml.includes(ownerLogin));
+
+    const logoutApiRes = await fetch(`${baseOrigin}/api/v1/auth/logout`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: baseOrigin,
+        cookie: `qaeh_session=${activeSessionToken}`,
+        'x-csrf-token': authCsrf,
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(logoutApiRes.status, 200);
+    const logoutCookies = getSetCookieHeaders(logoutApiRes.headers);
+    assert.ok(logoutCookies.some((c) => c.startsWith('qaeh_session=') && /Max-Age=0/i.test(c)));
+
+    const postLogoutReplay = await fetch(`${baseOrigin}/`, {
+      redirect: 'manual',
+      headers: { cookie: `qaeh_session=${activeSessionToken}` },
+    });
+    assert.ok(postLogoutReplay.status === 307 || postLogoutReplay.status === 302);
+    assert.match(postLogoutReplay.headers.get('location') ?? '', /\/login$/);
 
     // Default 1 MiB body limit check on ordinary routes.
     const oversizedDefaultPayload = Buffer.alloc(1536 * 1024, 0x61);
@@ -244,7 +604,7 @@ test(
     });
     assert.equal(oversizedDefaultRes.status, 413);
 
-    // 6. Record observed idle container memory usage (RSS/WorkingSet via docker stats).
+    // 7. Record observed idle container memory usage (RSS/WorkingSet via docker stats).
     const containerIds = (await compose(['ps', '-q']))
       .stdout.split(/\r?\n/)
       .map((s) => s.trim())
@@ -311,9 +671,150 @@ test(
       '-d',
       pgDb,
       '-c',
-      "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';",
+      "SELECT string_agg(table_name, ',' ORDER BY table_name) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';",
     ]);
-    assert.equal(publicTablesOut.stdout.trim(), '0');
+    assert.equal(publicTablesOut.stdout.trim(), '_prisma_migrations,auth_sessions,owners');
+
+    // 7b. Verify Secure cookie issuance and transport enforcement through Nginx with test-only HTTPS.
+    const certPath = path.join(tlsTmpDir, 'nginx-test.crt');
+    const keyPath = path.join(tlsTmpDir, 'nginx-test.key');
+    const tlsNginxConfPath = path.join(tlsTmpDir, 'tls-default.conf');
+    const tlsComposeOverridePath = path.join(tlsTmpDir, 'compose.tls-override.yaml');
+
+    await execFileAsync('openssl', [
+      'req',
+      '-x509',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-sha256',
+      '-days',
+      '1',
+      '-subj',
+      '/CN=127.0.0.1',
+      '-addext',
+      'subjectAltName=IP:127.0.0.1,DNS:localhost',
+      '-keyout',
+      keyPath,
+      '-out',
+      certPath,
+    ]);
+    const caCertPem = await fs.readFile(certPath);
+    const baseNginxConf = await fs.readFile(path.join(repoRoot, 'infra', 'nginx', 'default.conf'), 'utf8');
+    const httpsNginxConf = baseNginxConf
+      .replace(/^server_tokens off;\s*/m, '')
+      .replace(
+        '  listen 80;\n  server_name _;',
+        [
+          '  listen 443 ssl;',
+          '  server_name _;',
+          '  ssl_certificate /etc/nginx/tls/nginx-test.crt;',
+          '  ssl_certificate_key /etc/nginx/tls/nginx-test.key;',
+          '  ssl_protocols TLSv1.2 TLSv1.3;',
+        ].join('\n'),
+      );
+    await fs.writeFile(tlsNginxConfPath, httpsNginxConf, 'utf8');
+
+    const httpsOrigin = `https://127.0.0.1:${nginxHttpsPort}`;
+    currentAppOrigin = httpsOrigin;
+    await fs.writeFile(
+      tlsComposeOverridePath,
+      [
+        'services:',
+        '  nginx:',
+        '    ports:',
+        `      - "127.0.0.1:${nginxHttpsPort}:443"`,
+        '    volumes:',
+        `      - ${tlsNginxConfPath}:/etc/nginx/conf.d/tls-https.conf:ro`,
+        `      - ${certPath}:/etc/nginx/tls/nginx-test.crt:ro`,
+        `      - ${keyPath}:/etc/nginx/tls/nginx-test.key:ro`,
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    await compose(['up', '-d', '--wait'], [tlsComposeOverridePath]);
+
+    // Plain HTTP request with spoofed X-Forwarded-Proto: https must be overwritten by Nginx and rejected (403) when APP_ORIGIN is https://.
+    const httpDowngradeAttempt = await fetch(`${baseOrigin}/api/v1/auth/csrf`, {
+      headers: { 'X-Forwarded-Proto': 'https' },
+    });
+    assert.equal(httpDowngradeAttempt.status, 403);
+    assert.equal(getSetCookieHeaders(httpDowngradeAttempt.headers).length, 0);
+
+    // Real HTTPS through Nginx succeeds with verified CA and issues host-only HttpOnly; Secure; SameSite=Lax; Path=/ cookie.
+    const httpsJar = new Map();
+    const httpsCsrfRes = await httpsRequestWithCa(`${httpsOrigin}/api/v1/auth/csrf`, {
+      ca: caCertPem,
+    });
+    assert.equal(httpsCsrfRes.status, 200);
+    applySetCookiesToJar(httpsJar, httpsCsrfRes.setCookies);
+    const { csrfToken: httpsPreCsrf } = JSON.parse(httpsCsrfRes.text);
+
+    const httpsLoginBody = JSON.stringify({
+      loginIdentifier: ownerLogin,
+      password: ownerPassword,
+    });
+    const httpsLoginRes = await httpsRequestWithCa(`${httpsOrigin}/api/v1/auth/login`, {
+      method: 'POST',
+      ca: caCertPem,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(httpsLoginBody)),
+        origin: httpsOrigin,
+        cookie: formatCookieJar(httpsJar),
+        'x-csrf-token': httpsPreCsrf,
+      },
+      body: httpsLoginBody,
+    });
+    assert.equal(httpsLoginRes.status, 200);
+    const httpsSessionSetCookie = httpsLoginRes.setCookies.find((c) => c.startsWith('qaeh_session='));
+    assert.ok(httpsSessionSetCookie, 'Expected qaeh_session cookie over Nginx HTTPS');
+    assert.match(httpsSessionSetCookie, /;\s*HttpOnly/i);
+    assert.match(httpsSessionSetCookie, /;\s*Secure/i);
+    assert.match(httpsSessionSetCookie, /;\s*SameSite=Lax/i);
+    assert.match(httpsSessionSetCookie, /;\s*Path=\//i);
+    assert.doesNotMatch(httpsSessionSetCookie, /;\s*Domain=/i);
+    applySetCookiesToJar(httpsJar, httpsLoginRes.setCookies);
+    const { csrfToken: httpsAuthCsrf } = JSON.parse(httpsLoginRes.text);
+
+    const httpsRootRes = await httpsRequestWithCa(`${httpsOrigin}/`, {
+      ca: caCertPem,
+      headers: {
+        cookie: `qaeh_session=${httpsJar.get('qaeh_session')}`,
+      },
+    });
+    assert.equal(httpsRootRes.status, 200);
+    assert.equal(httpsRootRes.setCookies.length, 0);
+    assert.match(httpsRootRes.text, /System status:\s*(?:<!-- -->)?Ready/);
+
+    const httpsLogoutPayload = '{}';
+    const httpsLogoutRes = await httpsRequestWithCa(`${httpsOrigin}/api/v1/auth/logout`, {
+      method: 'POST',
+      ca: caCertPem,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(httpsLogoutPayload)),
+        origin: httpsOrigin,
+        cookie: `qaeh_session=${httpsJar.get('qaeh_session')}`,
+        'x-csrf-token': httpsAuthCsrf,
+      },
+      body: httpsLogoutPayload,
+    });
+    assert.equal(httpsLogoutRes.status, 200);
+    assert.ok(httpsLogoutRes.setCookies.some((c) => c.startsWith('qaeh_session=') && /Max-Age=0/i.test(c) && /;\s*Secure/i.test(c)));
+
+    const httpsAfterLogout = await httpsRequestWithCa(`${httpsOrigin}/`, {
+      ca: caCertPem,
+      headers: {
+        cookie: `qaeh_session=${httpsJar.get('qaeh_session')}`,
+      },
+    });
+    assert.ok(httpsAfterLogout.status === 307 || httpsAfterLogout.status === 302);
+    assert.match(String(httpsAfterLogout.headers.location ?? ''), /\/login$/);
+
+    // Restore base HTTP stack for the Nginx header-overwrite & upload streaming probe.
+    currentAppOrigin = baseOrigin;
+    await compose(['up', '-d', '--wait']);
 
     // 8. Verify Nginx overwrites spoofed X-Forwarded-For / X-Forwarded-Proto / X-Forwarded-Host
     // and enforces /api/v1/evidence HTTP/1.1 streaming + 11 MiB body limit.

@@ -1,9 +1,9 @@
 # ADR-001: Next.js, NestJS, and PostgreSQL Monorepo on Single VPS
 
-- **Status:** Accepted
+- **Status:** Accepted (updated in `P1-03` on `2026-11-21` for as-built single-owner auth, read-only SSR cookie forwarding, CSRF, and strict Nginx proxy trust)
 - **Date:** 2026-11-18
-- **Slice:** `P1-01` — Phase 1 Slice 1 (Repository and local container foundation)
-- **Related specification:** [project_sheet.md](../project_sheet.md) (§§2, 6.0–6.5, 6.6.1)
+- **Slice:** `P1-01` — Phase 1 Slice 1 (foundation) · updated in `P1-03` (`AC07` authentication core)
+- **Related specification:** [project_sheet.md](../project_sheet.md) (§§2–4, 6.0–6.6)
 
 ## Context
 
@@ -21,17 +21,17 @@ Selecting a VPS deployment target removed earlier shared-hosting runtime constra
 Adopt a `pnpm` TypeScript monorepo deployed via Docker Compose behind a single-origin Nginx reverse proxy on a Linux VPS:
 
 1. **Workspace layout (`pnpm` workspaces):**
-   - `apps/api`: NestJS modular monolith on the Express adapter (`@nestjs/platform-express`), owning runtime DTO allowlist validation (`ValidationPipe`), exception sanitization, authentication/session/CSRF enforcement (`P1-03`+), business services, Prisma/PostgreSQL persistence, and private object-storage access (`P1-05`+).
-   - `apps/web`: Next.js App Router (`output: 'standalone'`) owning server-rendered HTML structure, accessible interactive UI, and `@media print` report presentation. `apps/web` holds zero database or object-storage packages/credentials and queries `apps/api` exclusively over internal HTTP (`INTERNAL_API_BASE_URL`) with `cache: 'no-store'`.
+   - `apps/api`: NestJS modular monolith on the Express adapter (`@nestjs/platform-express`), owning runtime DTO allowlist validation (`ValidationPipe`), exception sanitization, default-deny authentication/session/CSRF enforcement (`P1-03`: PostgreSQL singleton `owners` + SHA-256 `token_digest` `auth_sessions`, salted adaptive `scrypt`, bounded per-IP login throttling, browser-bound pre-login and session-bound authenticated `X-CSRF-Token` + exact `Origin` checks in `APP_GUARD` before multipart interceptors), business services accepting an explicit `AuthenticatedActor`, Prisma/PostgreSQL persistence, and private object-storage access (`P1-05`+).
+   - `apps/web`: Next.js App Router (`output: 'standalone'`) owning server-rendered HTML structure, accessible `/login` and sign-out controls, and `@media print` report presentation. `apps/web` holds zero database or object-storage packages/credentials; SSR reads forward **only** the requesting browser's `qaeh_session` cookie to fixed `INTERNAL_API_BASE_URL` (`/api/v1/auth/session`) with `cache: 'no-store'`, leaving sessions untouched and emitting zero `Set-Cookie` headers, while browser auth mutations call same-origin `/api/v1/auth/*` directly.
    - `packages/api-client`: OpenAPI TypeScript types and fetch client generated from `apps/api/openapi.json` (`openapi-typescript` + `openapi-fetch`) and verified for zero drift via `pnpm openapi:check`.
    - `specs/features`: Canonical Gherkin acceptance specifications (`AC01`–`AC08`).
 2. **Single-origin ingress and network segmentation (`compose.yaml`, `infra/nginx/default.conf`):**
-   - Only `nginx` publishes a host port (`HTTP` locally in `P1-01`; `HTTPS` + `HTTP→HTTPS` redirect on VPS in `P1-11` / `F03`).
+   - Only `nginx` publishes a host port (`HTTP` locally in `P1-01`–`P1-03` plus test-only `HTTPS` verification in `P1-03`; live `HTTPS` + `HTTP→HTTPS` redirect on VPS in `P1-11` / `F03`).
    - `/api/v1/*` routes to `api:3001` (with `/api/v1/evidence` configured upfront for HTTP/1.1 unbuffered request streaming and bounded body/timeout limits); `/` and `/_next/static/*` route to `web:3000`.
-   - Nginx overwrites `X-Forwarded-For` (`$remote_addr`), `X-Forwarded-Proto` (`$scheme`), and `X-Forwarded-Host` (`$http_host`), and NestJS rejects wildcard `TRUST_PROXY=true`.
+   - Nginx overwrites `X-Forwarded-For` (`$remote_addr`), `X-Forwarded-Proto` (`$scheme`), and `X-Forwarded-Host` (`$http_host`), and NestJS restricts `TRUST_PROXY` strictly to `false`, `loopback`, explicit IP/CIDR, or the configured `nginx` ingress service hostname (`hopIndex === 0` only — rejecting wildcard `true`, numeric hop counts, and broad RFC1918 ranges so sibling containers such as `web` cannot spoof forwarding headers).
    - `postgres` runs on an internal-only Docker network (`data_net`) shared solely with `api` and persists state on a named volume (`postgres_data`).
-3. **Reproducible container and test baseline (`P1-01`):**
-   - Multi-stage Dockerfiles (`apps/api/Dockerfile`, `apps/web/Dockerfile`) and Compose manifests pin all external images (`node:24.21.0-trixie-slim`, `postgres:17-bookworm`, `nginx:1.30-alpine`) by immutable `@sha256:<64-hex>` digest, verified by `scripts/check-digests.mjs`, and run application containers as non-root `node` (`UID 1000`).
+3. **Reproducible container and test baseline (`P1-01`–`P1-03`):**
+   - Multi-stage Dockerfiles (`apps/api/Dockerfile`, `apps/web/Dockerfile`) and Compose manifests pin all external images (`node:24.22.3-trixie-slim`, `postgres:17-bookworm`, `nginx:1.30-alpine-slim`) by immutable `@sha256:<64-hex>` digest, verified by `scripts/check-digests.mjs`, and run application containers as non-root `node` (`UID 1000`). `apps/api/Dockerfile` bundles operator CLI `/app/scripts/provision-owner.ts` while keeping Prisma CLI in devDependencies.
    - Integration tests run against disposable, project-isolated PostgreSQL containers (`compose.test.yaml` + `scripts/test-db.sh` scoped strictly to `qaeh_test_<id>`).
 
 ## Alternatives Considered

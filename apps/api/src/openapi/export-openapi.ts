@@ -12,7 +12,8 @@ async function exportOpenApi(): Promise<void> {
   const env = validateApiEnv({
     NODE_ENV: 'development',
     DATABASE_URL: 'postgresql://qaeh_openapi:qaeh_openapi@localhost:5432/qaeh_openapi',
-    TRUST_PROXY: '1',
+    TRUST_PROXY: 'false',
+    APP_ORIGIN: 'http://127.0.0.1:8080',
   });
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule.register(env), {

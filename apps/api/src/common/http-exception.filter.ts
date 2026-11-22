@@ -28,6 +28,15 @@ export class RequestValidationException extends BadRequestException {
   }
 }
 
+export class LoginThrottledException extends HttpException {
+  public readonly retryAfterSeconds: number;
+
+  constructor(retryAfterSeconds: number) {
+    super('Too many requests.', HttpStatus.TOO_MANY_REQUESTS);
+    this.retryAfterSeconds = Math.max(1, Math.ceil(retryAfterSeconds));
+  }
+}
+
 function mapStatusToErrorCode(status: number): { code: string; fallbackMessage: string } {
   switch (status) {
     case HttpStatus.BAD_REQUEST:
@@ -57,8 +66,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
 
-    response.setHeader('Cache-Control', 'no-store');
+    if (!response.getHeader('Cache-Control')) {
+      response.setHeader('Cache-Control', 'no-store');
+    }
     response.setHeader('X-Content-Type-Options', 'nosniff');
+
+    if (exception instanceof LoginThrottledException) {
+      response.setHeader('Retry-After', String(exception.retryAfterSeconds));
+    }
 
     if (exception instanceof RequestValidationException) {
       const body: ApiErrorBody = {

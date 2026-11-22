@@ -54,6 +54,158 @@
           "health"
         ]
       }
+    },
+    "/api/v1/auth/csrf": {
+      "get": {
+        "operationId": "getAuthCsrfToken",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Browser-bound anti-CSRF token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CsrfTokenResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insecure transport rejected when HTTPS origin is configured"
+          }
+        },
+        "summary": "Bootstrap browser-bound pre-login or session-bound anti-CSRF token",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "loginOwner",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "description": "Browser-bound anti-CSRF token obtained from GET /api/v1/auth/csrf",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Owner authenticated; fresh session cookie and authenticated CSRF token issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid login payload or undeclared DTO fields"
+          },
+          "401": {
+            "description": "Generic authentication failure"
+          },
+          "403": {
+            "description": "Missing or invalid Origin or X-CSRF-Token"
+          },
+          "429": {
+            "description": "Bounded login rate limit exceeded"
+          }
+        },
+        "summary": "Authenticate the provisioned single owner and issue a fresh session cookie",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "operationId": "getAuthSession",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Active authenticated owner session summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStatusResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, or revoked session"
+          }
+        },
+        "summary": "Read-only authenticated owner session lookup (emits zero Set-Cookie headers)",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "logoutOwner",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "description": "Session-bound anti-CSRF token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session invalidated and cookie cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required"
+          },
+          "403": {
+            "description": "Missing or invalid Origin or X-CSRF-Token"
+          }
+        },
+        "summary": "Invalidate the current owner session and clear browser auth cookies",
+        "tags": [
+          "auth"
+        ]
+      }
     }
   },
   "info": {
@@ -109,6 +261,121 @@
         },
         "required": [
           "status"
+        ]
+      },
+      "CsrfTokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "csrfToken": {
+            "type": "string",
+            "example": "dG9rZW4tZXhhbXBsZS1vcGFxdWUtY3NyZg"
+          }
+        },
+        "required": [
+          "csrfToken"
+        ]
+      },
+      "LoginRequestDto": {
+        "type": "object",
+        "properties": {
+          "loginIdentifier": {
+            "type": "string",
+            "example": "owner@example.test",
+            "maxLength": 200
+          },
+          "password": {
+            "type": "string",
+            "example": "••••••••••••",
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "loginIdentifier",
+          "password"
+        ]
+      },
+      "OwnerSummaryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "11111111-2222-4333-8444-555555555555"
+          },
+          "loginIdentifier": {
+            "type": "string",
+            "example": "owner@example.test"
+          },
+          "timezone": {
+            "type": "string",
+            "example": "Europe/Bratislava"
+          }
+        },
+        "required": [
+          "id",
+          "loginIdentifier",
+          "timezone"
+        ]
+      },
+      "LoginResponseDto": {
+        "type": "object",
+        "properties": {
+          "authenticated": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "example": true
+          },
+          "owner": {
+            "$ref": "#/components/schemas/OwnerSummaryDto"
+          },
+          "csrfToken": {
+            "type": "string",
+            "example": "Y2hhbmdlZC1hdXRoZW50aWNhdGVkLWNzcmYtdG9rZW4"
+          }
+        },
+        "required": [
+          "authenticated",
+          "owner",
+          "csrfToken"
+        ]
+      },
+      "SessionStatusResponseDto": {
+        "type": "object",
+        "properties": {
+          "authenticated": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "example": true
+          },
+          "owner": {
+            "$ref": "#/components/schemas/OwnerSummaryDto"
+          }
+        },
+        "required": [
+          "authenticated",
+          "owner"
+        ]
+      },
+      "EmptyBodyDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "LogoutResponseDto": {
+        "type": "object",
+        "properties": {
+          "authenticated": {
+            "type": "boolean",
+            "enum": [
+              false
+            ],
+            "example": false
+          }
+        },
+        "required": [
+          "authenticated"
         ]
       }
     }

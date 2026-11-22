@@ -5,3 +5,33 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+model Owner {
+  id              String        @id @default(uuid()) @db.Uuid
+  singletonKey    Boolean       @unique @default(true) @map("singleton_key")
+  loginIdentifier String        @unique @map("login_identifier") @db.VarChar(200)
+  passwordHash    String        @map("password_hash")
+  timezone        String        @default("Europe/Bratislava") @db.VarChar(100)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  sessions        AuthSession[]
+
+  @@map("owners")
+}
+
+model AuthSession {
+  id           String    @id @default(uuid()) @db.Uuid
+  ownerId      String    @map("owner_id") @db.Uuid
+  tokenDigest  String    @unique @map("token_digest") @db.VarChar(64)
+  csrfSalt     String    @map("csrf_salt") @db.VarChar(64)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokeReason String?   @map("revoke_reason") @db.VarChar(64)
+
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([ownerId, revokedAt], map: "auth_sessions_owner_active_idx")
+  @@index([expiresAt], map: "auth_sessions_expires_at_idx")
+  @@map("auth_sessions")
+}

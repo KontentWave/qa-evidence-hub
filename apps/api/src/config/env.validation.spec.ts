@@ -5,22 +5,28 @@ describe('validateApiEnv', () => {
   const validBaseEnv = {
     NODE_ENV: 'production',
     API_PORT: '3001',
+    APP_ORIGIN: 'https://hub.synthetic.invalid',
     DATABASE_URL: 'postgresql://qaeh_user:top_secret_pw_123@postgres-internal:5432/qaeh_db?schema=public',
     DATABASE_POOL_MAX: '10',
     POSTGRES_MAX_CONNECTIONS: '30',
     DATABASE_STATEMENT_TIMEOUT_MS: '5000',
-    TRUST_PROXY: '1',
+    TRUST_PROXY: 'nginx',
   };
 
-  it('parses valid API environment settings with bounded pool and explicit proxy trust', () => {
+  it('parses valid API environment settings with bounded pool, exact origin, and explicit Nginx proxy trust', () => {
     const parsed = validateApiEnv(validBaseEnv);
 
     expect(parsed.nodeEnv).toBe('production');
     expect(parsed.apiPort).toBe(3001);
+    expect(parsed.appOrigin).toBe('https://hub.synthetic.invalid');
     expect(parsed.databasePoolMax).toBe(10);
     expect(parsed.postgresMaxConnections).toBe(30);
     expect(parsed.databaseStatementTimeoutMs).toBe(5000);
-    expect(parsed.trustProxy).toBe(1);
+    expect(parsed.trustProxy).toEqual({
+      mode: 'allowlist',
+      cidrs: [],
+      hostnames: ['nginx'],
+    });
   });
 
   it('rejects missing DATABASE_URL', () => {
@@ -65,35 +71,98 @@ describe('validateApiEnv', () => {
     ).toThrow(/DATABASE_POOL_MAX/);
   });
 
-  it('rejects unbounded wildcard TRUST_PROXY values such as true or 0.0.0.0/0', () => {
-    expect(() =>
-      validateApiEnv({
-        ...validBaseEnv,
-        TRUST_PROXY: 'true',
-      }),
-    ).toThrow(/TRUST_PROXY/);
-
-    expect(() =>
-      validateApiEnv({
-        ...validBaseEnv,
-        TRUST_PROXY: '0.0.0.0/0',
-      }),
-    ).toThrow(/TRUST_PROXY/);
+  it('rejects wildcard, numeric hop-count, or broad private TRUST_PROXY values', () => {
+    for (const forbidden of ['true', '0.0.0.0/0', '1', 'uniquelocal', 'linklocal']) {
+      expect(() =>
+        validateApiEnv({
+          ...validBaseEnv,
+          TRUST_PROXY: forbidden,
+        }),
+      ).toThrow(/TRUST_PROXY/);
+    }
   });
 
-  it('accepts false or explicit subnet/named proxy trust', () => {
+  it('accepts false, loopback, explicit CIDR, or explicit Nginx ingress hostname', () => {
     expect(
       validateApiEnv({
         ...validBaseEnv,
         TRUST_PROXY: 'false',
       }).trustProxy,
-    ).toBe(false);
+    ).toEqual({ mode: 'disabled' });
 
     expect(
       validateApiEnv({
         ...validBaseEnv,
-        TRUST_PROXY: 'loopback, uniquelocal',
+        TRUST_PROXY: 'loopback, 192.0.2.10/32, nginx',
       }).trustProxy,
-    ).toEqual(['loopback', 'uniquelocal']);
+    ).toEqual({
+      mode: 'allowlist',
+      cidrs: ['127.0.0.0/8', '::1/128', '192.0.2.10/32'],
+      hostnames: ['nginx'],
+    });
+  });
+
+  it('requires exact HTTPS APP_ORIGIN in production for non-loopback hosts and rejects paths/queries/trailing slashes', () => {
+    expect(() =>
+      validateApiEnv({
+        ...validBaseEnv,
+        APP_ORIGIN: undefined,
+      }),
+    ).toThrow(/APP_ORIGIN/);
+
+    expect(() =>
+      validateApiEnv({
+        ...validBaseEnv,
+        APP_ORIGIN: 'http://hub.synthetic.invalid',
+      }),
+    ).toThrow(/APP_ORIGIN/);
+
+    expect(() =>
+      validateApiEnv({
+        ...validBaseEnv,
+        APP_ORIGIN: 'https://hub.synthetic.invalid/',
+      }),
+    ).toThrow(/APP_ORIGIN/);
+
+    expect(() =>
+      validateApiEnv({
+        ...validBaseEnv,
+        APP_ORIGIN: 'https://hub.synthetic.invalid/app',
+      }),
+    ).toThrow(/APP_ORIGIN/);
+
+    expect(
+      validateApiEnv({
+        ...validBaseEnv,
+        APP_ORIGIN: 'http://127.0.0.1:8080',
+      }).appOrigin,
+    ).toBe('http://127.0.0.1:8080');
+  });
+
+  it('defaults AUTH_PASSWORD_SCRYPT_LN to 16, accepts 14-16, and rejects 17 and 18 with a clear configuration error', () => {
+    expect(validateApiEnv(validBaseEnv).passwordScryptLn).toBe(16);
+
+    for (const allowed of ['14', '15', '16']) {
+      expect(
+        validateApiEnv({
+          ...validBaseEnv,
+          AUTH_PASSWORD_SCRYPT_LN: allowed,
+        }).passwordScryptLn,
+      ).toBe(Number(allowed));
+    }
+
+    for (const rejected of ['13', '17', '18']) {
+      let caught: unknown;
+      try {
+        validateApiEnv({
+          ...validBaseEnv,
+          AUTH_PASSWORD_SCRYPT_LN: rejected,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(EnvValidationError);
+      expect((caught as Error).message).toMatch(/AUTH_PASSWORD_SCRYPT_LN.*14.*16/);
+    }
   });
 });

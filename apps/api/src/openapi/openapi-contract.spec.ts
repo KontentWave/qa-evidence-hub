@@ -9,11 +9,12 @@ import { buildOpenApiDocument, configureApp, serializeOpenApiDocument } from '..
 import { validateApiEnv } from '../config/env.validation';
 
 describe('OpenAPI contract and production Swagger UI boundary', () => {
-  it('matches committed apps/api/openapi.json without drift and documents /api/v1/health endpoints', async () => {
+  it('matches committed apps/api/openapi.json without drift and documents /api/v1/health and /api/v1/auth endpoints', async () => {
     const env = validateApiEnv({
       NODE_ENV: 'development',
       DATABASE_URL: 'postgresql://qaeh:synthetic@localhost:5432/qaeh',
-      TRUST_PROXY: '1',
+      TRUST_PROXY: 'false',
+      APP_ORIGIN: 'http://127.0.0.1:8080',
     });
 
     const moduleRef = await Test.createTestingModule({
@@ -33,6 +34,10 @@ describe('OpenAPI contract and production Swagger UI boundary', () => {
       expect(committedJson).toBe(expectedJson);
       expect(Object.keys(doc.paths)).toContain('/api/v1/health');
       expect(Object.keys(doc.paths)).toContain('/api/v1/health/ready');
+      expect(Object.keys(doc.paths)).toContain('/api/v1/auth/csrf');
+      expect(Object.keys(doc.paths)).toContain('/api/v1/auth/login');
+      expect(Object.keys(doc.paths)).toContain('/api/v1/auth/session');
+      expect(Object.keys(doc.paths)).toContain('/api/v1/auth/logout');
     } finally {
       await app.close();
     }
@@ -42,7 +47,8 @@ describe('OpenAPI contract and production Swagger UI boundary', () => {
     const prodEnv = validateApiEnv({
       NODE_ENV: 'production',
       DATABASE_URL: 'postgresql://qaeh:synthetic@localhost:5432/qaeh',
-      TRUST_PROXY: '1',
+      TRUST_PROXY: 'nginx',
+      APP_ORIGIN: 'https://hub.synthetic.invalid',
     });
 
     const moduleRef = await Test.createTestingModule({

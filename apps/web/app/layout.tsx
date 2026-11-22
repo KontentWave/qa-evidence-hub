@@ -18,14 +18,10 @@ export default function RootLayout({ children }: { readonly children: ReactNode 
         <div className="page-shell">
           <header className="site-header">
             <span className="brand-label">QA Evidence Hub</span>
-            <nav aria-label="Page sections" className="section-nav no-print">
-              <a href="#system-readiness">System readiness</a>
-              <a href="#workspace-scope">Foundation scope</a>
-            </nav>
           </header>
           {children}
           <footer className="site-footer">
-            <p>Private QA engagement workspace — Phase 1 Foundation (P1-01).</p>
+            <p>Private QA engagement workspace — single-owner authenticated access.</p>
           </footer>
         </div>
       </body>

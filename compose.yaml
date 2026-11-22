@@ -40,11 +40,12 @@ services:
     environment:
       NODE_ENV: production
       API_PORT: 3001
+      APP_ORIGIN: ${APP_ORIGIN:-http://127.0.0.1:${NGINX_HTTP_PORT:-8080}}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
       POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-30}
       DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-5000}
-      TRUST_PROXY: ${TRUST_PROXY:-1}
+      TRUST_PROXY: ${TRUST_PROXY:-nginx}
     networks:
       - edge_net
       - data_net
@@ -86,7 +87,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:3000/').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:3000/login').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 5s
       timeout: 5s
