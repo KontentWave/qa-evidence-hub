@@ -162,25 +162,40 @@ test(
     const ownerLogin = `owner.${runId}@synthetic.invalid`;
     const ownerPassword = `SyntheticF01Pass!2026#${runId}`;
     const tlsTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `qaeh-f01-tls-${runId}-`));
+    const envTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `qaeh-f01-env-${runId}-`));
+    const invalidLnProject = `${project}_ln17`;
+    const invalidLnContainerName = `${invalidLnProject}_api_startup`;
+
+    const savedInheritedAuthEnv = {
+      AUTH_PASSWORD_SCRYPT_LN: process.env.AUTH_PASSWORD_SCRYPT_LN,
+      AUTH_LOGIN_MAX_ATTEMPTS: process.env.AUTH_LOGIN_MAX_ATTEMPTS,
+    };
+    delete process.env.AUTH_PASSWORD_SCRYPT_LN;
+    delete process.env.AUTH_LOGIN_MAX_ATTEMPTS;
 
     let apiImageId = '';
     let webImageId = '';
     let currentAppOrigin = `http://127.0.0.1:${nginxPort}`;
 
-    const composeEnv = () => ({
-      ...process.env,
-      COMPOSE_PROJECT_NAME: project,
-      POSTGRES_USER: pgUser,
-      POSTGRES_PASSWORD: pgPassword,
-      POSTGRES_DB: pgDb,
-      DATABASE_URL: `postgresql://${pgUser}:${pgPassword}@postgres:5432/${pgDb}?schema=public`,
-      API_IMAGE: apiImageId,
-      WEB_IMAGE: webImageId,
-      NGINX_BIND_ADDRESS: '127.0.0.1',
-      NGINX_HTTP_PORT: String(nginxPort),
-      APP_ORIGIN: currentAppOrigin,
-      TRUST_PROXY: 'nginx',
-    });
+    const composeEnv = () => {
+      const inherited = { ...process.env };
+      delete inherited.AUTH_PASSWORD_SCRYPT_LN;
+      delete inherited.AUTH_LOGIN_MAX_ATTEMPTS;
+      return {
+        ...inherited,
+        COMPOSE_PROJECT_NAME: project,
+        POSTGRES_USER: pgUser,
+        POSTGRES_PASSWORD: pgPassword,
+        POSTGRES_DB: pgDb,
+        DATABASE_URL: `postgresql://${pgUser}:${pgPassword}@postgres:5432/${pgDb}?schema=public`,
+        API_IMAGE: apiImageId,
+        WEB_IMAGE: webImageId,
+        NGINX_BIND_ADDRESS: '127.0.0.1',
+        NGINX_HTTP_PORT: String(nginxPort),
+        APP_ORIGIN: currentAppOrigin,
+        TRUST_PROXY: 'nginx',
+      };
+    };
 
     const compose = (args, extraFiles = []) =>
       execFileAsync(
@@ -202,7 +217,33 @@ test(
       );
 
     t.after(async () => {
+      if (savedInheritedAuthEnv.AUTH_PASSWORD_SCRYPT_LN === undefined) {
+        delete process.env.AUTH_PASSWORD_SCRYPT_LN;
+      } else {
+        process.env.AUTH_PASSWORD_SCRYPT_LN = savedInheritedAuthEnv.AUTH_PASSWORD_SCRYPT_LN;
+      }
+      if (savedInheritedAuthEnv.AUTH_LOGIN_MAX_ATTEMPTS === undefined) {
+        delete process.env.AUTH_LOGIN_MAX_ATTEMPTS;
+      } else {
+        process.env.AUTH_LOGIN_MAX_ATTEMPTS = savedInheritedAuthEnv.AUTH_LOGIN_MAX_ATTEMPTS;
+      }
       await execFileAsync('docker', ['rm', '-f', probeContainerName]).catch(() => undefined);
+      await execFileAsync('docker', ['rm', '-f', invalidLnContainerName]).catch(() => undefined);
+      await execFileAsync(
+        'docker',
+        ['compose', '-p', invalidLnProject, '-f', composeFile, 'down', '-v', '--remove-orphans'],
+        {
+          cwd: repoRoot,
+          env: {
+            ...composeEnv(),
+            COMPOSE_PROJECT_NAME: invalidLnProject,
+            API_IMAGE:
+              apiImageId || 'sha256:1111111111111111111111111111111111111111111111111111111111111111',
+            WEB_IMAGE:
+              webImageId || 'sha256:2222222222222222222222222222222222222222222222222222222222222222',
+          },
+        },
+      ).catch(() => undefined);
       if (apiImageId && webImageId) {
         await compose(['down', '-v', '--remove-orphans']).catch(() => undefined);
       } else {
@@ -219,6 +260,7 @@ test(
         await execFileAsync('docker', ['rmi', '-f', apiTag, webTag]).catch(() => undefined);
       }
       await fs.rm(tlsTmpDir, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rm(envTmpDir, { recursive: true, force: true }).catch(() => undefined);
     });
 
     // 1. Build production API and Web images from Dockerfiles (unless prebuilt image refs are supplied).
@@ -815,6 +857,243 @@ test(
     // Restore base HTTP stack for the Nginx header-overwrite & upload streaming probe.
     currentAppOrigin = baseOrigin;
     await compose(['up', '-d', '--wait']);
+
+    // 7c. Verify operator `docker compose --env-file` path forwards AUTH_PASSWORD_SCRYPT_LN
+    // and AUTH_LOGIN_MAX_ATTEMPTS via checked-in compose.yaml and production API image,
+    // with inherited shell copies cleared from the test process environment.
+    const sanitizedComposeProcessEnv = () => {
+      const clean = { ...process.env };
+      delete clean.AUTH_PASSWORD_SCRYPT_LN;
+      delete clean.AUTH_LOGIN_MAX_ATTEMPTS;
+      delete clean.COMPOSE_PROJECT_NAME;
+      delete clean.COMPOSE_FILE;
+      delete clean.COMPOSE_ENV_FILES;
+      delete clean.POSTGRES_USER;
+      delete clean.POSTGRES_PASSWORD;
+      delete clean.POSTGRES_DB;
+      delete clean.DATABASE_URL;
+      delete clean.API_IMAGE;
+      delete clean.WEB_IMAGE;
+      delete clean.NGINX_BIND_ADDRESS;
+      delete clean.NGINX_HTTP_PORT;
+      delete clean.APP_ORIGIN;
+      delete clean.TRUST_PROXY;
+      return clean;
+    };
+
+    const writeOperatorEnvFile = async (fileName, extraEntries = {}) => {
+      const lines = [
+        `POSTGRES_USER=${pgUser}`,
+        `POSTGRES_PASSWORD=${pgPassword}`,
+        `POSTGRES_DB=${pgDb}`,
+        `DATABASE_URL=${internalDbUrl}`,
+        `API_IMAGE=${apiImageId}`,
+        `WEB_IMAGE=${webImageId}`,
+        'NGINX_BIND_ADDRESS=127.0.0.1',
+        `NGINX_HTTP_PORT=${nginxPort}`,
+        `APP_ORIGIN=${baseOrigin}`,
+        'TRUST_PROXY=nginx',
+        ...Object.entries(extraEntries).map(([key, value]) => `${key}=${value}`),
+      ];
+      const filePath = path.join(envTmpDir, fileName);
+      await fs.writeFile(filePath, `${lines.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
+      return filePath;
+    };
+
+    const composeWithEnvFile = (envFilePath, args, options = {}) =>
+      execFileAsync(
+        'docker',
+        [
+          'compose',
+          '-p',
+          options.projectName ?? project,
+          '--env-file',
+          envFilePath,
+          '-f',
+          composeFile,
+          ...args,
+        ],
+        {
+          cwd: repoRoot,
+          env: sanitizedComposeProcessEnv(),
+          maxBuffer: 20 * 1024 * 1024,
+          ...(options.timeout ? { timeout: options.timeout } : {}),
+        },
+      );
+
+    const refreshNginxAndWaitReady = async (envFilePath) => {
+      await composeWithEnvFile(envFilePath, ['restart', 'nginx']);
+      let ready = false;
+      for (let i = 0; i < 40; i += 1) {
+        try {
+          const check = await fetch(`${baseOrigin}/api/v1/health/ready`);
+          if (check.status === 200) {
+            ready = true;
+            break;
+          }
+        } catch {
+          // retry while nginx restarts
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      assert.equal(ready, true, 'Expected /api/v1/health/ready to return 200 through Nginx');
+    };
+
+    // With both keys omitted from .env, the rendered Compose service uses defaults 16 and 5.
+    const defaultOperatorEnvPath = await writeOperatorEnvFile('operator-defaults.env');
+    const renderedDefaultConfig = JSON.parse(
+      (await composeWithEnvFile(defaultOperatorEnvPath, ['config', '--format', 'json'])).stdout,
+    );
+    assert.equal(renderedDefaultConfig.services?.api?.environment?.AUTH_PASSWORD_SCRYPT_LN, '16');
+    assert.equal(renderedDefaultConfig.services?.api?.environment?.AUTH_LOGIN_MAX_ATTEMPTS, '5');
+
+    // With AUTH_PASSWORD_SCRYPT_LN=14, the API starts healthy and its validated runtime setting is 14.
+    const scrypt14EnvPath = await writeOperatorEnvFile('operator-scrypt-14.env', {
+      AUTH_PASSWORD_SCRYPT_LN: '14',
+    });
+    await composeWithEnvFile(scrypt14EnvPath, ['up', '-d', '--wait']);
+    const api14Cid = (await composeWithEnvFile(scrypt14EnvPath, ['ps', '-q', 'api'])).stdout.trim();
+    assert.ok(api14Cid, 'Expected running api container under AUTH_PASSWORD_SCRYPT_LN=14');
+    const api14Health = (
+      await execFileAsync('docker', [
+        'inspect',
+        api14Cid,
+        '--format',
+        '{{.State.Status}}|{{.State.Health.Status}}',
+      ])
+    ).stdout.trim();
+    assert.equal(api14Health, 'running|healthy');
+    await refreshNginxAndWaitReady(scrypt14EnvPath);
+
+    const runtimeSettingProbe = [
+      'const fs = require("node:fs");',
+      'const { validateApiEnv } = require("./dist/config/env.validation");',
+      'const { PasswordHasherService } = require("./dist/auth/password-hasher.service");',
+      '(async () => {',
+      '  const pid1Raw = fs.readFileSync("/proc/1/environ", "utf8").split("\\0").filter(Boolean);',
+      '  const pid1Env = Object.fromEntries(pid1Raw.map((entry) => {',
+      '    const idx = entry.indexOf("=");',
+      '    return [entry.slice(0, idx), entry.slice(idx + 1)];',
+      '  }));',
+      '  const validated = validateApiEnv(pid1Env);',
+      '  const sampleHash = await new PasswordHasherService(validated).hashPassword("SyntheticProbe!2026#Ln14");',
+      '  process.stdout.write(JSON.stringify({',
+      '    passwordScryptLn: validated.passwordScryptLn,',
+      '    loginMaxAttempts: validated.loginMaxAttempts,',
+      '    sampleHashPrefix: sampleHash.slice(0, 20),',
+      '  }));',
+      '})().catch((err) => {',
+      '  console.error(err);',
+      '  process.exit(1);',
+      '});',
+    ].join('\n');
+    const runtime14Observed = JSON.parse(
+      (
+        await composeWithEnvFile(scrypt14EnvPath, [
+          'exec',
+          '-T',
+          'api',
+          'node',
+          '-e',
+          runtimeSettingProbe,
+        ])
+      ).stdout,
+    );
+    assert.equal(runtime14Observed.passwordScryptLn, 14);
+    assert.equal(runtime14Observed.loginMaxAttempts, 5);
+    assert.equal(runtime14Observed.sampleHashPrefix, '$scrypt$ln=14,r=8,p=');
+
+    // With AUTH_PASSWORD_SCRYPT_LN=17, normal API startup command exits nonzero with validation error
+    // naming AUTH_PASSWORD_SCRYPT_LN and its allowed range of 14–16 (bounded wait + cleanup).
+    const scrypt17EnvPath = await writeOperatorEnvFile('operator-scrypt-17.env', {
+      AUTH_PASSWORD_SCRYPT_LN: '17',
+    });
+    let ln17ExitCode = 0;
+    let ln17TimedOut = false;
+    let ln17Output = '';
+    try {
+      await composeWithEnvFile(
+        scrypt17EnvPath,
+        ['run', '--rm', '--no-deps', '--name', invalidLnContainerName, 'api'],
+        { projectName: invalidLnProject, timeout: 15_000 },
+      );
+    } catch (err) {
+      ln17TimedOut = Boolean(err.killed) || err.code === 'ETIMEDOUT';
+      ln17ExitCode = typeof err.code === 'number' ? err.code : 1;
+      ln17Output = `${err.stdout ?? ''}\n${err.stderr ?? ''}`;
+    } finally {
+      await execFileAsync('docker', ['rm', '-f', invalidLnContainerName]).catch(() => undefined);
+      await composeWithEnvFile(
+        scrypt17EnvPath,
+        ['down', '-v', '--remove-orphans'],
+        { projectName: invalidLnProject, timeout: 30_000 },
+      ).catch(() => undefined);
+      await fs.rm(scrypt17EnvPath, { force: true }).catch(() => undefined);
+    }
+    assert.equal(
+      ln17TimedOut,
+      false,
+      'Normal API startup command did not exit within bounded 15s wait for AUTH_PASSWORD_SCRYPT_LN=17',
+    );
+    assert.notEqual(ln17ExitCode, 0, 'Expected AUTH_PASSWORD_SCRYPT_LN=17 startup to exit non-zero');
+    assert.match(ln17Output, /AUTH_PASSWORD_SCRYPT_LN.*14.*16/);
+    assert.deepEqual(await listProjectDockerResources(invalidLnProject), {
+      containers: [],
+      networks: [],
+      volumes: [],
+    });
+
+    // With AUTH_LOGIN_MAX_ATTEMPTS=2, two invalid logins through Nginx from one client with valid Origin
+    // and CSRF return 401, and the third returns 429 with a positive Retry-After.
+    const maxAttempts2EnvPath = await writeOperatorEnvFile('operator-max-attempts-2.env', {
+      AUTH_LOGIN_MAX_ATTEMPTS: '2',
+    });
+    await composeWithEnvFile(maxAttempts2EnvPath, ['up', '-d', '--wait']);
+    await refreshNginxAndWaitReady(maxAttempts2EnvPath);
+
+    const throttleJar = new Map();
+    const throttleCsrfRes = await fetch(`${baseOrigin}/api/v1/auth/csrf`);
+    assert.equal(throttleCsrfRes.status, 200);
+    applySetCookiesToJar(throttleJar, getSetCookieHeaders(throttleCsrfRes.headers));
+    const { csrfToken: throttleCsrfToken } = await throttleCsrfRes.json();
+    assert.ok(throttleCsrfToken);
+
+    const attemptInvalidLogin = async (attemptNumber) => {
+      const res = await fetch(`${baseOrigin}/api/v1/auth/login`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: baseOrigin,
+          cookie: formatCookieJar(throttleJar),
+          'x-csrf-token': throttleCsrfToken,
+        },
+        body: JSON.stringify({
+          loginIdentifier: ownerLogin,
+          password: `${ownerPassword}-invalid-${attemptNumber}`,
+        }),
+      });
+      applySetCookiesToJar(throttleJar, getSetCookieHeaders(res.headers));
+      return res;
+    };
+
+    const invalidLogin1 = await attemptInvalidLogin(1);
+    assert.equal(invalidLogin1.status, 401);
+
+    const invalidLogin2 = await attemptInvalidLogin(2);
+    assert.equal(invalidLogin2.status, 401);
+
+    const invalidLogin3 = await attemptInvalidLogin(3);
+    assert.equal(invalidLogin3.status, 429);
+    const retryAfterHeader = invalidLogin3.headers.get('retry-after') ?? '';
+    assert.match(
+      retryAfterHeader,
+      /^\d+$/,
+      `Expected numeric Retry-After header on 429 response, got "${retryAfterHeader}"`,
+    );
+    const retryAfterSeconds = Number.parseInt(retryAfterHeader, 10);
+    assert.ok(retryAfterSeconds > 0, `Expected positive Retry-After, got ${retryAfterSeconds}`);
+
+    await fs.rm(envTmpDir, { recursive: true, force: true });
 
     // 8. Verify Nginx overwrites spoofed X-Forwarded-For / X-Forwarded-Proto / X-Forwarded-Host
     // and enforces /api/v1/evidence HTTP/1.1 streaming + 11 MiB body limit.

@@ -4,6 +4,13 @@ All notable changes to QA Evidence Hub are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0 versions (`0.x.y`) reflect active Phase 1 development on synthetic data only; real client data remains unauthorized until `F03`–`F04` and the section 8 production audit verdict pass in `P1-13`.
 
+## [0.3.1] - 2026-11-23
+
+### Fixed (`P1-03` Compose Auth Overrides)
+
+- Forwarded `AUTH_PASSWORD_SCRYPT_LN: "${AUTH_PASSWORD_SCRYPT_LN:-16}"` and `AUTH_LOGIN_MAX_ATTEMPTS: "${AUTH_LOGIN_MAX_ATTEMPTS:-5}"` beside `TRUST_PROXY` under `services.api.environment` in `compose.yaml`, and added `AUTH_LOGIN_MAX_ATTEMPTS=5` beside `AUTH_PASSWORD_SCRYPT_LN=16` in `.env.example`, preserving existing API defaults while enabling operator `docker compose --env-file` overrides.
+- Extended `scripts/f01-containers.test.mjs` to exercise `compose.yaml` and the production API image through `docker compose --env-file` with inherited process environment copies cleared, verifying rendered defaults (`16` and `5`), healthy API startup and validated runtime `passwordScryptLn = 14` with `AUTH_PASSWORD_SCRYPT_LN=14`, bounded non-zero startup validation failure on `AUTH_PASSWORD_SCRYPT_LN=17` (`14`–`16`), and per-IP `401`/`401`/`429` (`Retry-After > 0`) login throttling through Nginx with `AUTH_LOGIN_MAX_ATTEMPTS=2`.
+
 ## [0.3.0] - 2026-11-22
 
 ### Security & Fixed (`P1-03` Review Hardening)
