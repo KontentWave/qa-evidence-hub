@@ -90,13 +90,28 @@ describe('HomePage (apps/web/app/page.tsx)', () => {
     }
     expect(allDeps.some((dep) => dep.startsWith('@aws-sdk/'))).toBe(false);
 
+    async function collectTsFiles(dir: string): Promise<string[]> {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      const files: string[] = [];
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          files.push(...(await collectTsFiles(full)));
+        } else if (
+          entry.isFile() &&
+          (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx')) &&
+          !entry.name.endsWith('.spec.ts') &&
+          !entry.name.endsWith('.spec.tsx')
+        ) {
+          files.push(full);
+        }
+      }
+      return files;
+    }
+
     const sourceFiles = [
-      path.join(webRoot, 'src/lib/api.ts'),
-      path.join(webRoot, 'src/components/login-form.tsx'),
-      path.join(webRoot, 'src/components/logout-button.tsx'),
-      path.join(webRoot, 'app/layout.tsx'),
-      path.join(webRoot, 'app/page.tsx'),
-      path.join(webRoot, 'app/login/page.tsx'),
+      ...(await collectTsFiles(path.join(webRoot, 'src'))),
+      ...(await collectTsFiles(path.join(webRoot, 'app'))),
     ];
 
     for (const filePath of sourceFiles) {

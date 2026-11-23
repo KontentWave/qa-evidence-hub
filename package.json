@@ -18,6 +18,7 @@
     "test:integration": "bash scripts/test-db.sh run pnpm --filter @qa-evidence-hub/api test:integration",
     "test:bdd:foundation": "bash scripts/test-db.sh run pnpm --filter @qa-evidence-hub/api test:bdd:foundation && node scripts/verify-cucumber-executed.mjs apps/api/coverage/cucumber-foundation.json",
     "test:bdd:auth": "bash scripts/test-db.sh run pnpm --filter @qa-evidence-hub/api test:bdd:auth && node scripts/verify-cucumber-executed.mjs apps/api/coverage/cucumber-auth.json",
+    "test:bdd:engagement": "pnpm --filter @qa-evidence-hub/api-client build && pnpm --filter @qa-evidence-hub/web build && bash scripts/test-db.sh run pnpm --filter @qa-evidence-hub/api test:bdd:engagement && node scripts/verify-cucumber-executed.mjs apps/api/coverage/cucumber-engagement.json",
     "test:e2e:foundation": "node scripts/run-playwright-foundation-smoke.mjs",
     "test:infra": "pnpm verify:digests && node --test scripts/test-db-isolation.test.mjs && node --test scripts/f01-containers.test.mjs",
     "test:gates:blocking": "node --test scripts/security-gates-blocking.test.mjs",

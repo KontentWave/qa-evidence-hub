@@ -38,7 +38,7 @@ describe('API PostgreSQL readiness and baseline migration integration', () => {
     }
   });
 
-  it('applies baseline and P1-03 owner/auth_sessions migrations cleanly with no out-of-slice domain tables', async () => {
+  it('applies baseline, P1-03 auth, and P1-04 engagement-context migrations cleanly with no out-of-slice domain tables', async () => {
     const client = new pg.Client({ connectionString: databaseUrl });
     await client.connect();
 
@@ -51,6 +51,7 @@ describe('API PostgreSQL readiness and baseline migration integration', () => {
       expect(migrations.rows.map((r) => r.migration_name)).toEqual([
         '20261118000000_baseline',
         '20261121000000_owner_and_auth_sessions',
+        '20261123000000_engagement_context',
       ]);
       for (const row of migrations.rows) {
         expect(row.finished_at).not.toBeNull();
@@ -66,7 +67,10 @@ describe('API PostgreSQL readiness and baseline migration integration', () => {
       expect(publicTables.rows.map((r) => r.table_name)).toEqual([
         '_prisma_migrations',
         'auth_sessions',
+        'clients',
         'owners',
+        'projects',
+        'test_sessions',
       ]);
     } finally {
       await client.end();

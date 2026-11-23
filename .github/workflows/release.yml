@@ -57,6 +57,7 @@ jobs:
           pnpm test:integration
           pnpm test:bdd:foundation
           pnpm test:bdd:auth
+          pnpm test:bdd:engagement
           pnpm verify:security:secrets
           pnpm verify:security:static
           pnpm verify:security:deps

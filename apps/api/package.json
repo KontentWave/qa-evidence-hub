@@ -14,6 +14,7 @@
     "test:integration": "prisma generate && prisma migrate deploy && vitest run --config vitest.integration.config.ts",
     "test:bdd:foundation": "prisma generate && prisma migrate deploy && node -e \"require('node:fs').mkdirSync('coverage', { recursive: true })\" && tsc -p tsconfig.bdd.json && cucumber-js --config cucumber.foundation.mjs",
     "test:bdd:auth": "prisma generate && prisma migrate deploy && node -e \"require('node:fs').mkdirSync('coverage', { recursive: true })\" && tsc -p tsconfig.bdd.json && cucumber-js --config cucumber.auth.mjs",
+    "test:bdd:engagement": "prisma generate && prisma migrate deploy && node -e \"require('node:fs').mkdirSync('coverage', { recursive: true })\" && tsc -p tsconfig.bdd.json && cucumber-js --config cucumber.engagement.mjs",
     "openapi:export": "prisma generate && tsc -p tsconfig.build.json && node dist/openapi/export-openapi.js",
     "openapi:check": "prisma generate && tsc -p tsconfig.build.json && node dist/openapi/export-openapi.js --check"
   },

@@ -715,7 +715,10 @@ test(
       '-c',
       "SELECT string_agg(table_name, ',' ORDER BY table_name) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';",
     ]);
-    assert.equal(publicTablesOut.stdout.trim(), '_prisma_migrations,auth_sessions,owners');
+    assert.equal(
+      publicTablesOut.stdout.trim(),
+      '_prisma_migrations,auth_sessions,clients,owners,projects,test_sessions',
+    );
 
     // 7b. Verify Secure cookie issuance and transport enforcement through Nginx with test-only HTTPS.
     const certPath = path.join(tlsTmpDir, 'nginx-test.crt');

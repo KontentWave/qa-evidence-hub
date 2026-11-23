@@ -106,6 +106,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List clients newest-first */
+        get: operations["listClients"];
+        put?: never;
+        /** Create a client engagement container */
+        post: operations["createClient"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clients/{clientId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get client details by ID */
+        get: operations["getClient"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clients/{clientId}/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List projects belonging to the specified client newest-first */
+        get: operations["listClientProjects"];
+        put?: never;
+        /** Create an active project under the specified client */
+        post: operations["createClientProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clients/{clientId}/projects/{projectId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get project details scoped to its parent client */
+        get: operations["getClientProject"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{projectId}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List test sessions belonging to the specified project newest-first */
+        get: operations["listProjectSessions"];
+        put?: never;
+        /** Create a test session under an active project */
+        post: operations["createProjectSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{projectId}/sessions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get test session details scoped to its parent project */
+        get: operations["getProjectSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -174,6 +279,147 @@ export interface components {
              * @enum {boolean}
              */
             authenticated: false;
+        };
+        CreateClientDto: {
+            /** @example Example Client */
+            name: string;
+            /** @example Synthetic engagement notes */
+            notes?: string | null;
+        };
+        ClientDto: {
+            /**
+             * Format: uuid
+             * @example 11111111-2222-4333-8444-555555555555
+             */
+            id: string;
+            /** @example Example Client */
+            name: string;
+            /** @example Synthetic engagement notes */
+            notes: string | null;
+            /**
+             * Format: date-time
+             * @example 2026-10-06T09:00:00.000Z
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @example 2026-10-06T09:00:00.000Z
+             */
+            updatedAt: string;
+        };
+        ClientListResponseDto: {
+            items: components["schemas"]["ClientDto"][];
+        };
+        CreateProjectDto: {
+            /** @example Checkout QA */
+            name: string;
+            /** @example Checkout payment and order confirmation regression */
+            description?: string | null;
+            /** @example Staging sandbox with synthetic test cards */
+            testingContext?: string | null;
+            /** @example Capture viewport and build version on payment errors. */
+            instructions?: string | null;
+        };
+        ProjectDto: {
+            /**
+             * Format: uuid
+             * @example 22222222-3333-4444-8555-666666666666
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @example 11111111-2222-4333-8444-555555555555
+             */
+            clientId: string;
+            /** @example Checkout QA */
+            name: string;
+            /**
+             * @example Active
+             * @enum {string}
+             */
+            status: "Active" | "Archived";
+            description: string | null;
+            testingContext: string | null;
+            instructions: string | null;
+            /**
+             * Format: date-time
+             * @example 2026-10-06T09:00:00.000Z
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @example 2026-10-06T09:00:00.000Z
+             */
+            updatedAt: string;
+        };
+        ProjectListResponseDto: {
+            items: components["schemas"]["ProjectDto"][];
+        };
+        CreateSessionDto: {
+            /** @example Checkout regression */
+            purpose: string;
+            /**
+             * Format: date-time
+             * @example 2026-10-06T09:00:00Z
+             */
+            startedAt: string;
+            /**
+             * Format: date-time
+             * @example 2026-10-06T10:30:00Z
+             */
+            endedAt?: string | null;
+            /** @example staging */
+            environment?: string | null;
+            /** @example Desktop */
+            device?: string | null;
+            /** @example Linux */
+            os?: string | null;
+            /** @example Firefox 132 */
+            browser?: string | null;
+            /** @example 2026.10.06-rc1 */
+            buildVersion?: string | null;
+            /** @example Covered guest and signed-in checkout paths. */
+            notes?: string | null;
+        };
+        SessionDto: {
+            /**
+             * Format: uuid
+             * @example 33333333-4444-4555-8666-777777777777
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @example 22222222-3333-4444-8555-666666666666
+             */
+            projectId: string;
+            /** @example Checkout regression */
+            purpose: string;
+            /**
+             * Format: date-time
+             * @example 2026-10-06T09:00:00.000Z
+             */
+            startedAt: string;
+            /** Format: date-time */
+            endedAt: string | null;
+            environment: string | null;
+            device: string | null;
+            os: string | null;
+            browser: string | null;
+            buildVersion: string | null;
+            notes: string | null;
+            /**
+             * Format: date-time
+             * @example 2026-10-06T09:00:00.000Z
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @example 2026-10-06T09:00:00.000Z
+             */
+            updatedAt: string;
+        };
+        SessionListResponseDto: {
+            items: components["schemas"]["SessionDto"][];
         };
     };
     responses: never;
@@ -376,6 +622,419 @@ export interface operations {
             };
             /** @description Missing or invalid Origin or X-CSRF-Token */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listClients: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Client list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientListResponseDto"];
+                };
+            };
+            /** @description Authentication is required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createClient: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Session-bound anti-CSRF token */
+                "X-CSRF-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateClientDto"];
+            };
+        };
+        responses: {
+            /** @description Client created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientDto"];
+                };
+            };
+            /** @description Validation failed or undeclared DTO fields supplied */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication is required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid Origin or X-CSRF-Token */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getClient: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Client details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientDto"];
+                };
+            };
+            /** @description Invalid client ID format */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication is required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Client was not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listClientProjects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Client project list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectListResponseDto"];
+                };
+            };
+            /** @description Invalid client ID format */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication is required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Parent client was not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createClientProject: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Session-bound anti-CSRF token */
+                "X-CSRF-Token": string;
+            };
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProjectDto"];
+            };
+        };
+        responses: {
+            /** @description Project created as Active */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDto"];
+                };
+            };
+            /** @description Validation failed or undeclared DTO fields supplied */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication is required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid Origin or X-CSRF-Token */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Parent client was not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getClientProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDto"];
+                };
+            };
+            /** @description Invalid client or project ID format */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication is required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Client or project was not found, or parent mismatch */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listProjectSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project test session list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionListResponseDto"];
+                };
+            };
+            /** @description Invalid project ID format */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication is required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Parent project was not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createProjectSession: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Session-bound anti-CSRF token */
+                "X-CSRF-Token": string;
+            };
+            path: {
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSessionDto"];
+            };
+        };
+        responses: {
+            /** @description Test session created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDto"];
+                };
+            };
+            /** @description Validation failed (including invalid time range or undeclared DTO fields) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication is required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid Origin or X-CSRF-Token */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Parent project was not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Parent project is archived and read-only */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getProjectSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: string;
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Test session details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDto"];
+                };
+            };
+            /** @description Invalid project or session ID format */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication is required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Project or test session was not found, or parent mismatch */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
