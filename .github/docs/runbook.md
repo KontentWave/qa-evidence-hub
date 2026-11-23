@@ -1,6 +1,6 @@
 # QA Evidence Hub — Operational & CI Governance Runbook
 
-- **Status:** Phase 1 Foundation (`F01`–`F02` accepted as of `v0.2.1` / `fbdaa55`) and `P1-03` (`AC07` single-owner authentication, PostgreSQL session boundary, CSRF protection, and operator provisioning/reset CLI) active; `F03`–`F04` VPS provisioning, TLS, R2, deployment, backup, restore, rollback, and alerting procedures remain **planned for `P1-11`–`P1-12`**.
+- **Status:** Phase 1 Foundation (`F01`–`F02` accepted as of `v0.2.1` / `fbdaa55`), `P1-03` (`AC07` single-owner authentication, PostgreSQL session boundary, CSRF protection, and operator provisioning/reset CLI), and `P1-04` (`AC01` `@S1` engagement context and `AC07` project-page guard) active; `F03`–`F04` VPS provisioning, TLS, R2, deployment, backup, restore, rollback, and alerting procedures remain **planned for `P1-11`–`P1-12`**.
 - **Real-data authorization:** **NOT AUTHORIZED.** Synthetic data only until `P1-11`–`P1-13` (`F03`–`F04` and section 8 Audit verdict) are completed and signed off by `@KontentWave`.
 - **Related documents:** [project_sheet.md](./project_sheet.md) · [ADR-001](./adr/001-next-nest-postgres-vps.md) · [ADR-015](./adr/015-phase1-delivery-profile.md)
 
@@ -17,9 +17,9 @@ Prerequisites: Node.js `>=24.0.0` (`v24.21+` LTS), `pnpm@12.21.0` via Corepack (
 | Formatting & lint | `pnpm format:check && pnpm lint` | Enforces `.editorconfig` formatting and ESLint rules (including `apps/web` DB/storage import bans) |
 | Strict types & OpenAPI | `pnpm typecheck && pnpm openapi:check` | Verifies strict TypeScript across all workspaces + `e2e/` and zero drift in `packages/api-client` |
 | Unit & gate suites | `pnpm test` | Runs API/Web Vitest unit/contract tests plus digest, sync-sheet, format, workflow, coverage, license, and Cucumber-guard tests |
-| API service coverage | `pnpm test:coverage` | Runs V8 coverage and enforces `>= 80%` line and `>= 80%` branch coverage on implemented API auth/domain services (`apps/api/src/auth/**` active in `P1-03`) |
-| PostgreSQL integration | `pnpm test:integration` | Provisions disposable PostgreSQL (`scripts/test-db.sh`), runs `prisma migrate deploy`, and executes API DB & `auth-api.integration.spec.ts` suites |
-| Foundation & Auth BDD | `pnpm test:bdd:foundation && pnpm test:bdd:auth` | Runs Cucumber.js `@foundation` and `@P1-03` (`specs/features/private-access.feature`) scenarios against migrated PostgreSQL and fails if `0` scenarios execute |
+| API service coverage | `pnpm test:coverage` | Runs V8 coverage and enforces `>= 80%` line and `>= 80%` branch coverage on implemented API auth/domain services (`apps/api/src/{auth,clients,projects,sessions}/**` active through `P1-04`) |
+| PostgreSQL integration | `pnpm test:integration` | Provisions disposable PostgreSQL (`scripts/test-db.sh`), runs `prisma migrate deploy`, and executes API DB, `auth-api`, and `engagement-context` integration suites |
+| Foundation, Auth & Engagement BDD | `pnpm test:bdd:foundation && pnpm test:bdd:auth && pnpm test:bdd:engagement` | Runs Cucumber.js `@foundation`, `@P1-03`, and `(@AC01 and @S1) or @P1-04` (`specs/features/{private-access,engagement-context}.feature`) scenarios against migrated PostgreSQL and fails if `0` scenarios execute |
 | `F01` + `P1-03` container suite | `node --test scripts/f01-containers.test.mjs` | Verifies non-root UID `1000`, internal-only DB/API/Web ports, operator CLI provisioning, anonymous `/` redirect, login/`Ready`/read-only SSR/logout, test-only HTTPS `Secure` cookie + HTTP downgrade rejection through Nginx, header overwrite/`413` caps, and volume survival |
 | Browser Nginx smoke | `pnpm test:e2e:foundation` | Boots production stack behind Nginx and verifies anonymous `/` -> `/login` redirect, keyboard error-summary focus, owner sign-in -> `System status: Ready`, and sign-out denial in headless Chromium |
 | Security & license gates | `pnpm verify:security:secrets && pnpm verify:security:static && pnpm verify:security:deps && pnpm verify:security:containers && pnpm verify:licenses` | Runs Gitleaks, AST SAST + Trivy IaC config, `pnpm audit`, Trivy OCI image scan, and SPDX license enforcement |
@@ -36,7 +36,7 @@ Enforced by `scripts/check-api-service-coverage.mjs` after `pnpm --filter @qa-ev
 - **Documented exclusions:**
   - Declarative NestJS wiring, transport contracts, and tests: `*.spec.ts`, `*.dto.ts`, `*.module.ts`, `*.controller.ts`, `*.port.ts`, and barrel `index.ts` files (controllers, DTO allowlists, and storage ports are verified through HTTP/Cucumber/PostgreSQL integration and contract suites rather than line-percentage gaming).
   - Foundation bootstrap/infrastructure plumbing outside auth/domain directories: `src/main.ts`, `src/app.module.ts`, `src/app.setup.ts`, `src/common/**`, `src/config/**`, `src/health/**`, `src/openapi/**`, and `src/prisma/**`.
-- **Active enforcement (`P1-03`+):** Beginning in `P1-03` (`apps/api/src/auth/**`), `scripts/check-api-service-coverage.mjs` enforces `>= 80%` line and `>= 80%` branch coverage per eligible file and in aggregate (`PASS` in `apps/api/coverage/service-coverage-gate.json` and the GitHub Actions job summary). Critical acceptance scenarios remain mandatory regardless of coverage percentage (`project_sheet.md` §6.0, §7).
+- **Active enforcement (`P1-03`+):** Beginning in `P1-03` (`apps/api/src/auth/**`) and extended in `P1-04` (`apps/api/src/{clients,projects,sessions}/**`), `scripts/check-api-service-coverage.mjs` enforces `>= 80%` line and `>= 80%` branch coverage per eligible file and in aggregate (`PASS` in `apps/api/coverage/service-coverage-gate.json` and the GitHub Actions job summary). Critical acceptance scenarios remain mandatory regardless of coverage percentage (`project_sheet.md` §6.0, §7).
 
 ---
 

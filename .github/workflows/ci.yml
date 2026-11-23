@@ -98,13 +98,17 @@ jobs:
       - name: Run Cucumber.js P1-03 authentication BDD scenarios (fail if zero execute)
         run: pnpm test:bdd:auth
 
-      - name: Upload Foundation and Auth Cucumber JSON reports
+      - name: Run Cucumber.js P1-04 engagement context and project-guard BDD scenarios (fail if zero execute)
+        run: pnpm test:bdd:engagement
+
+      - name: Upload Foundation, Auth, and Engagement Cucumber JSON reports
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cucumber-bdd-reports
           path: |
             apps/api/coverage/cucumber-foundation.json
             apps/api/coverage/cucumber-auth.json
+            apps/api/coverage/cucumber-engagement.json
           if-no-files-found: error
           retention-days: 14
 

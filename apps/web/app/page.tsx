@@ -1,4 +1,4 @@
-import { LogoutButton } from '../src/components/logout-button';
+import { WorkspaceHeader } from '../src/components/workspace-header';
 import { fetchPlatformReadiness, requireAuthenticatedOwner } from '../src/lib/api';
 
 export const dynamic = 'force-dynamic';
@@ -10,26 +10,25 @@ export default async function HomePage() {
 
   return (
     <main id="main-content" tabIndex={-1}>
-      <div className="workspace-topbar">
-        <div>
-          <h1>QA Evidence Hub</h1>
-          <p className="owner-meta">
-            Signed in as <strong>{owner.loginIdentifier}</strong> · Timezone{' '}
-            <span>{owner.timezone}</span>
-          </p>
-        </div>
-        <LogoutButton />
-      </div>
-
-      <nav aria-label="Workspace sections" className="section-nav workspace-section-nav no-print">
-        <a href="#system-readiness">System readiness</a>
-        <a href="#workspace-scope">Access boundary</a>
-      </nav>
+      <WorkspaceHeader heading="QA Evidence Hub" owner={owner} />
 
       <p className="lead">
         Structured workspace for engagement evidence capture, finding lifecycle tracking, and
         printable project reports.
       </p>
+
+      <section aria-labelledby="engagement-heading" className="card" id="engagement-context">
+        <h2 id="engagement-heading">Engagement context</h2>
+        <p>
+          Organize client engagements, active testing projects, and timestamped test sessions before
+          capturing evidence and findings.
+        </p>
+        <p className="card-actions no-print">
+          <a className="btn-primary link-button" href="/clients">
+            Open clients &amp; engagements
+          </a>
+        </p>
+      </section>
 
       <section aria-labelledby="readiness-heading" className="card" id="system-readiness">
         <h2 id="readiness-heading">Platform readiness</h2>
@@ -57,7 +56,7 @@ export default async function HomePage() {
             internal API with read-only <code>private, no-store</code> semantics.
           </li>
           <li>
-            Browser mutations call <code>/api/v1/auth/*</code> directly with exact{' '}
+            Browser mutations call <code>/api/v1/*</code> directly with exact{' '}
             <code>Origin</code> and session-bound <code>X-CSRF-Token</code> checks.
           </li>
         </ul>

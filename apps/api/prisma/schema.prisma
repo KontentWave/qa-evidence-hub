@@ -35,3 +35,62 @@ model AuthSession {
   @@index([expiresAt], map: "auth_sessions_expires_at_idx")
   @@map("auth_sessions")
 }
+
+enum ProjectStatus {
+  Active
+  Archived
+
+  @@map("project_status")
+}
+
+model Client {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @db.VarChar(200)
+  notes     String?   @db.Text
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  projects  Project[]
+
+  @@index([createdAt(sort: Desc), id(sort: Desc)], map: "clients_created_at_id_idx")
+  @@map("clients")
+}
+
+model Project {
+  id             String        @id @default(uuid()) @db.Uuid
+  clientId       String        @map("client_id") @db.Uuid
+  name           String        @db.VarChar(200)
+  status         ProjectStatus @default(Active)
+  description    String?       @db.Text
+  testingContext String?       @map("testing_context") @db.Text
+  instructions   String?       @db.Text
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  client   Client        @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sessions TestSession[]
+
+  @@index([clientId, createdAt(sort: Desc), id(sort: Desc)], map: "projects_client_id_created_at_id_idx")
+  @@map("projects")
+}
+
+model TestSession {
+  id           String    @id @default(uuid()) @db.Uuid
+  projectId    String    @map("project_id") @db.Uuid
+  purpose      String    @db.VarChar(200)
+  startedAt    DateTime  @map("started_at") @db.Timestamptz(6)
+  endedAt      DateTime? @map("ended_at") @db.Timestamptz(6)
+  environment  String?   @db.VarChar(200)
+  device       String?   @db.VarChar(200)
+  os           String?   @db.VarChar(200)
+  browser      String?   @db.VarChar(200)
+  buildVersion String?   @map("build_version") @db.VarChar(200)
+  notes        String?   @db.Text
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([projectId, id], map: "test_sessions_project_id_id_key")
+  @@index([projectId, startedAt(sort: Desc), createdAt(sort: Desc), id(sort: Desc)], map: "test_sessions_project_id_started_at_idx")
+  @@map("test_sessions")
+}

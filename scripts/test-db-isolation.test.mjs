@@ -111,7 +111,11 @@ test('isolates two concurrent TEST_RUN_ID instances, resets clean state, and tea
     );
     assert.deepEqual(
       migrationsAfter.rows.map((r) => r.migration_name),
-      ['20261118000000_baseline', '20261121000000_owner_and_auth_sessions'],
+      [
+        '20261118000000_baseline',
+        '20261121000000_owner_and_auth_sessions',
+        '20261123000000_engagement_context',
+      ],
     );
   } finally {
     await clientAfterReset.end();

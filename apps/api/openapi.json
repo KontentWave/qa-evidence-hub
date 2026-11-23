@@ -206,6 +206,437 @@
           "auth"
         ]
       }
+    },
+    "/api/v1/clients": {
+      "post": {
+        "operationId": "createClient",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "description": "Session-bound anti-CSRF token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClientDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Client created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed or undeclared DTO fields supplied"
+          },
+          "401": {
+            "description": "Authentication is required"
+          },
+          "403": {
+            "description": "Missing or invalid Origin or X-CSRF-Token"
+          }
+        },
+        "summary": "Create a client engagement container",
+        "tags": [
+          "clients"
+        ]
+      },
+      "get": {
+        "operationId": "listClients",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Client list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientListResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required"
+          }
+        },
+        "summary": "List clients newest-first",
+        "tags": [
+          "clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}": {
+      "get": {
+        "operationId": "getClient",
+        "parameters": [
+          {
+            "name": "clientId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "example": "11111111-2222-4333-8444-555555555555",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Client details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid client ID format"
+          },
+          "401": {
+            "description": "Authentication is required"
+          },
+          "404": {
+            "description": "Client was not found"
+          }
+        },
+        "summary": "Get client details by ID",
+        "tags": [
+          "clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/projects": {
+      "post": {
+        "operationId": "createClientProject",
+        "parameters": [
+          {
+            "name": "clientId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "example": "11111111-2222-4333-8444-555555555555",
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "description": "Session-bound anti-CSRF token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Project created as Active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed or undeclared DTO fields supplied"
+          },
+          "401": {
+            "description": "Authentication is required"
+          },
+          "403": {
+            "description": "Missing or invalid Origin or X-CSRF-Token"
+          },
+          "404": {
+            "description": "Parent client was not found"
+          }
+        },
+        "summary": "Create an active project under the specified client",
+        "tags": [
+          "projects"
+        ]
+      },
+      "get": {
+        "operationId": "listClientProjects",
+        "parameters": [
+          {
+            "name": "clientId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "example": "11111111-2222-4333-8444-555555555555",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Client project list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectListResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid client ID format"
+          },
+          "401": {
+            "description": "Authentication is required"
+          },
+          "404": {
+            "description": "Parent client was not found"
+          }
+        },
+        "summary": "List projects belonging to the specified client newest-first",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/projects/{projectId}": {
+      "get": {
+        "operationId": "getClientProject",
+        "parameters": [
+          {
+            "name": "clientId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "example": "11111111-2222-4333-8444-555555555555",
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "example": "22222222-3333-4444-8555-666666666666",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid client or project ID format"
+          },
+          "401": {
+            "description": "Authentication is required"
+          },
+          "404": {
+            "description": "Client or project was not found, or parent mismatch"
+          }
+        },
+        "summary": "Get project details scoped to its parent client",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/v1/projects/{projectId}/sessions": {
+      "post": {
+        "operationId": "createProjectSession",
+        "parameters": [
+          {
+            "name": "projectId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "example": "22222222-3333-4444-8555-666666666666",
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "description": "Session-bound anti-CSRF token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Test session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (including invalid time range or undeclared DTO fields)"
+          },
+          "401": {
+            "description": "Authentication is required"
+          },
+          "403": {
+            "description": "Missing or invalid Origin or X-CSRF-Token"
+          },
+          "404": {
+            "description": "Parent project was not found"
+          },
+          "409": {
+            "description": "Parent project is archived and read-only"
+          }
+        },
+        "summary": "Create a test session under an active project",
+        "tags": [
+          "sessions"
+        ]
+      },
+      "get": {
+        "operationId": "listProjectSessions",
+        "parameters": [
+          {
+            "name": "projectId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "example": "22222222-3333-4444-8555-666666666666",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project test session list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionListResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid project ID format"
+          },
+          "401": {
+            "description": "Authentication is required"
+          },
+          "404": {
+            "description": "Parent project was not found"
+          }
+        },
+        "summary": "List test sessions belonging to the specified project newest-first",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/v1/projects/{projectId}/sessions/{sessionId}": {
+      "get": {
+        "operationId": "getProjectSession",
+        "parameters": [
+          {
+            "name": "projectId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "example": "22222222-3333-4444-8555-666666666666",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "example": "33333333-4444-4555-8666-777777777777",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Test session details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid project or session ID format"
+          },
+          "401": {
+            "description": "Authentication is required"
+          },
+          "404": {
+            "description": "Project or test session was not found, or parent mismatch"
+          }
+        },
+        "summary": "Get test session details scoped to its parent project",
+        "tags": [
+          "sessions"
+        ]
+      }
     }
   },
   "info": {
@@ -376,6 +807,336 @@
         },
         "required": [
           "authenticated"
+        ]
+      },
+      "CreateClientDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Example Client",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 20000,
+            "example": "Synthetic engagement notes"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "ClientDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "11111111-2222-4333-8444-555555555555"
+          },
+          "name": {
+            "type": "string",
+            "example": "Example Client"
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "example": "Synthetic engagement notes"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-06T09:00:00.000Z"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-06T09:00:00.000Z"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "notes",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ClientListResponseDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientDto"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "CreateProjectDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Checkout QA",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 20000,
+            "example": "Checkout payment and order confirmation regression"
+          },
+          "testingContext": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 20000,
+            "example": "Staging sandbox with synthetic test cards"
+          },
+          "instructions": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 20000,
+            "example": "Capture viewport and build version on payment errors."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "ProjectDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "22222222-3333-4444-8555-666666666666"
+          },
+          "clientId": {
+            "type": "string",
+            "format": "uuid",
+            "example": "11111111-2222-4333-8444-555555555555"
+          },
+          "name": {
+            "type": "string",
+            "example": "Checkout QA"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "Active",
+              "Archived"
+            ],
+            "example": "Active"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "testingContext": {
+            "type": "string",
+            "nullable": true
+          },
+          "instructions": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-06T09:00:00.000Z"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-06T09:00:00.000Z"
+          }
+        },
+        "required": [
+          "id",
+          "clientId",
+          "name",
+          "status",
+          "description",
+          "testingContext",
+          "instructions",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ProjectListResponseDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectDto"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "CreateSessionDto": {
+        "type": "object",
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "example": "Checkout regression",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-06T09:00:00Z"
+          },
+          "endedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "example": "2026-10-06T10:30:00Z"
+          },
+          "environment": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 200,
+            "example": "staging"
+          },
+          "device": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 200,
+            "example": "Desktop"
+          },
+          "os": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 200,
+            "example": "Linux"
+          },
+          "browser": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 200,
+            "example": "Firefox 132"
+          },
+          "buildVersion": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 200,
+            "example": "2026.10.06-rc1"
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 20000,
+            "example": "Covered guest and signed-in checkout paths."
+          }
+        },
+        "required": [
+          "purpose",
+          "startedAt"
+        ]
+      },
+      "SessionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "33333333-4444-4555-8666-777777777777"
+          },
+          "projectId": {
+            "type": "string",
+            "format": "uuid",
+            "example": "22222222-3333-4444-8555-666666666666"
+          },
+          "purpose": {
+            "type": "string",
+            "example": "Checkout regression"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-06T09:00:00.000Z"
+          },
+          "endedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "environment": {
+            "type": "string",
+            "nullable": true
+          },
+          "device": {
+            "type": "string",
+            "nullable": true
+          },
+          "os": {
+            "type": "string",
+            "nullable": true
+          },
+          "browser": {
+            "type": "string",
+            "nullable": true
+          },
+          "buildVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-06T09:00:00.000Z"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-06T09:00:00.000Z"
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "purpose",
+          "startedAt",
+          "endedAt",
+          "environment",
+          "device",
+          "os",
+          "browser",
+          "buildVersion",
+          "notes",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "SessionListResponseDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionDto"
+            }
+          }
+        },
+        "required": [
+          "items"
         ]
       }
     }

@@ -1,9 +1,22 @@
 import 'server-only';
-import { createApiClient, type OwnerSummary } from '@qa-evidence-hub/api-client';
+import {
+  type ClientSummary,
+  createApiClient,
+  type OwnerSummary,
+  type ProjectSummary,
+  type QaEvidenceHubApiClient,
+  type TestSessionSummary,
+} from '@qa-evidence-hub/api-client';
 import { cookies } from 'next/headers';
-import { redirect } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 
-export type { OwnerSummary };
+export type { ClientSummary, OwnerSummary, ProjectSummary, TestSessionSummary };
+
+export type SsrReadResult<T> =
+  | { readonly kind: 'ok'; readonly data: T }
+  | { readonly kind: 'unauthorized' }
+  | { readonly kind: 'not_found' }
+  | { readonly kind: 'error' };
 
 export interface PlatformReadinessView {
   readonly state: 'ready' | 'not_ready';
@@ -104,10 +117,17 @@ export async function fetchPlatformReadiness(
   }
 }
 
-export async function fetchCurrentOwnerSession(
+const SAFE_UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function triggerNotFound(): never {
+  notFound();
+}
+
+function createAuthenticatedSsrClient(
   rawSessionCookie: string | undefined,
   customFetch: typeof globalThis.fetch = globalThis.fetch,
-): Promise<OwnerSummary | null> {
+): QaEvidenceHubApiClient | null {
   if (!rawSessionCookie || !SAFE_SESSION_TOKEN_REGEX.test(rawSessionCookie)) {
     return null;
   }
@@ -136,10 +156,33 @@ export async function fetchCurrentOwnerSession(
     });
   };
 
-  const client = createApiClient({
+  return createApiClient({
     baseUrl,
     fetch: noStoreSessionFetch,
   });
+}
+
+function classifyReadResponse<T>(status: number, data: T | undefined): SsrReadResult<T> {
+  if (status === 200 && data !== undefined) {
+    return { kind: 'ok', data };
+  }
+  if (status === 401) {
+    return { kind: 'unauthorized' };
+  }
+  if (status === 400 || status === 404) {
+    return { kind: 'not_found' };
+  }
+  return { kind: 'error' };
+}
+
+export async function fetchCurrentOwnerSession(
+  rawSessionCookie: string | undefined,
+  customFetch: typeof globalThis.fetch = globalThis.fetch,
+): Promise<OwnerSummary | null> {
+  const client = createAuthenticatedSsrClient(rawSessionCookie, customFetch);
+  if (!client) {
+    return null;
+  }
 
   try {
     const { data, response } = await client.GET('/api/v1/auth/session');
@@ -152,9 +195,13 @@ export async function fetchCurrentOwnerSession(
   }
 }
 
-export async function getOptionalAuthenticatedOwner(): Promise<OwnerSummary | null> {
+export async function getRawSessionCookie(): Promise<string | undefined> {
   const cookieStore = await cookies();
-  const rawToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  return cookieStore.get(SESSION_COOKIE_NAME)?.value;
+}
+
+export async function getOptionalAuthenticatedOwner(): Promise<OwnerSummary | null> {
+  const rawToken = await getRawSessionCookie();
   return fetchCurrentOwnerSession(rawToken);
 }
 
@@ -164,4 +211,157 @@ export async function requireAuthenticatedOwner(): Promise<OwnerSummary> {
     redirectToPath('/login');
   }
   return owner;
+}
+
+export async function fetchClientsForOwner(
+  rawSessionCookie?: string,
+  customFetch: typeof globalThis.fetch = globalThis.fetch,
+): Promise<SsrReadResult<readonly ClientSummary[]>> {
+  const token = rawSessionCookie ?? (await getRawSessionCookie());
+  const client = createAuthenticatedSsrClient(token, customFetch);
+  if (!client) {
+    return { kind: 'unauthorized' };
+  }
+  try {
+    const { data, response } = await client.GET('/api/v1/clients');
+    return classifyReadResponse(response.status, data?.items);
+  } catch {
+    return { kind: 'error' };
+  }
+}
+
+export async function fetchClientDetailForOwner(
+  clientId: string,
+  rawSessionCookie?: string,
+  customFetch: typeof globalThis.fetch = globalThis.fetch,
+): Promise<SsrReadResult<ClientSummary>> {
+  if (!SAFE_UUID_REGEX.test(clientId)) {
+    return { kind: 'not_found' };
+  }
+  const token = rawSessionCookie ?? (await getRawSessionCookie());
+  const client = createAuthenticatedSsrClient(token, customFetch);
+  if (!client) {
+    return { kind: 'unauthorized' };
+  }
+  try {
+    const { data, response } = await client.GET('/api/v1/clients/{clientId}', {
+      params: { path: { clientId } },
+    });
+    return classifyReadResponse(response.status, data);
+  } catch {
+    return { kind: 'error' };
+  }
+}
+
+export async function fetchClientProjectsForOwner(
+  clientId: string,
+  rawSessionCookie?: string,
+  customFetch: typeof globalThis.fetch = globalThis.fetch,
+): Promise<SsrReadResult<readonly ProjectSummary[]>> {
+  if (!SAFE_UUID_REGEX.test(clientId)) {
+    return { kind: 'not_found' };
+  }
+  const token = rawSessionCookie ?? (await getRawSessionCookie());
+  const client = createAuthenticatedSsrClient(token, customFetch);
+  if (!client) {
+    return { kind: 'unauthorized' };
+  }
+  try {
+    const { data, response } = await client.GET('/api/v1/clients/{clientId}/projects', {
+      params: { path: { clientId } },
+    });
+    return classifyReadResponse(response.status, data?.items);
+  } catch {
+    return { kind: 'error' };
+  }
+}
+
+export async function fetchClientProjectDetailForOwner(
+  clientId: string,
+  projectId: string,
+  rawSessionCookie?: string,
+  customFetch: typeof globalThis.fetch = globalThis.fetch,
+): Promise<SsrReadResult<ProjectSummary>> {
+  if (!SAFE_UUID_REGEX.test(clientId) || !SAFE_UUID_REGEX.test(projectId)) {
+    return { kind: 'not_found' };
+  }
+  const token = rawSessionCookie ?? (await getRawSessionCookie());
+  const client = createAuthenticatedSsrClient(token, customFetch);
+  if (!client) {
+    return { kind: 'unauthorized' };
+  }
+  try {
+    const { data, response } = await client.GET(
+      '/api/v1/clients/{clientId}/projects/{projectId}',
+      {
+        params: { path: { clientId, projectId } },
+      },
+    );
+    return classifyReadResponse(response.status, data);
+  } catch {
+    return { kind: 'error' };
+  }
+}
+
+export async function fetchProjectSessionsForOwner(
+  projectId: string,
+  rawSessionCookie?: string,
+  customFetch: typeof globalThis.fetch = globalThis.fetch,
+): Promise<SsrReadResult<readonly TestSessionSummary[]>> {
+  if (!SAFE_UUID_REGEX.test(projectId)) {
+    return { kind: 'not_found' };
+  }
+  const token = rawSessionCookie ?? (await getRawSessionCookie());
+  const client = createAuthenticatedSsrClient(token, customFetch);
+  if (!client) {
+    return { kind: 'unauthorized' };
+  }
+  try {
+    const { data, response } = await client.GET('/api/v1/projects/{projectId}/sessions', {
+      params: { path: { projectId } },
+    });
+    return classifyReadResponse(response.status, data?.items);
+  } catch {
+    return { kind: 'error' };
+  }
+}
+
+export async function fetchProjectSessionDetailForOwner(
+  projectId: string,
+  sessionId: string,
+  rawSessionCookie?: string,
+  customFetch: typeof globalThis.fetch = globalThis.fetch,
+): Promise<SsrReadResult<TestSessionSummary>> {
+  if (!SAFE_UUID_REGEX.test(projectId) || !SAFE_UUID_REGEX.test(sessionId)) {
+    return { kind: 'not_found' };
+  }
+  const token = rawSessionCookie ?? (await getRawSessionCookie());
+  const client = createAuthenticatedSsrClient(token, customFetch);
+  if (!client) {
+    return { kind: 'unauthorized' };
+  }
+  try {
+    const { data, response } = await client.GET(
+      '/api/v1/projects/{projectId}/sessions/{sessionId}',
+      {
+        params: { path: { projectId, sessionId } },
+      },
+    );
+    return classifyReadResponse(response.status, data);
+  } catch {
+    return { kind: 'error' };
+  }
+}
+
+export function unwrapSsrDataOrRedirect<T>(result: SsrReadResult<T>): T | null {
+  if (result.kind === 'unauthorized') {
+    redirectToPath('/login');
+  }
+  if (result.kind === 'not_found') {
+    triggerNotFound();
+  }
+  if (result.kind === 'error') {
+    return null;
+  }
+  return result.data;
 }

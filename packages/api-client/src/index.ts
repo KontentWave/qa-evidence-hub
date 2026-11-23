@@ -12,6 +12,15 @@ export type LoginResponse = components['schemas']['LoginResponseDto'];
 export type OwnerSummary = components['schemas']['OwnerSummaryDto'];
 export type SessionStatusResponse = components['schemas']['SessionStatusResponseDto'];
 export type LogoutResponse = components['schemas']['LogoutResponseDto'];
+export type CreateClientRequest = components['schemas']['CreateClientDto'];
+export type ClientSummary = components['schemas']['ClientDto'];
+export type ClientListResponse = components['schemas']['ClientListResponseDto'];
+export type CreateProjectRequest = components['schemas']['CreateProjectDto'];
+export type ProjectSummary = components['schemas']['ProjectDto'];
+export type ProjectListResponse = components['schemas']['ProjectListResponseDto'];
+export type CreateSessionRequest = components['schemas']['CreateSessionDto'];
+export type TestSessionSummary = components['schemas']['SessionDto'];
+export type TestSessionListResponse = components['schemas']['SessionListResponseDto'];
 
 export interface CreateApiClientOptions {
   readonly baseUrl: string;

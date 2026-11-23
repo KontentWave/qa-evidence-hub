@@ -6,9 +6,13 @@ Feature: Keep the personal workspace private
     When I request the <page> directly
     Then I am redirected to login without protected content
 
+    @P1-04
     Examples:
       | page               |
       | project page       |
+
+    Examples:
+      | page               |
       | finding page       |
       | project report     |
 
