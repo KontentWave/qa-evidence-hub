@@ -37,22 +37,22 @@
         "CVE-2026-97054",
         "CVE-2026-111943"
       ],
-      "reviewedAt": "2026-11-21",
+      "reviewedAt": "2026-11-23",
       "reviewedBy": "KontentWave",
       "expiresOn": "2027-02-19",
       "docRef": ".github/docs/runbook.md#4-dependency-and-container-vulnerability-policy",
-      "rationale": "Upstream official postgres:17-bookworm ships /usr/local/bin/gosu compiled with Go 1.24.6. gosu executes only local privilege-drop syscalls (setuid/setgid/execve) at container entrypoint startup on the internal data_net network and never invokes Go crypto/tls, net/http, net/mail, mime, or xml packages."
+      "rationale": "Upstream official postgres:19-bookworm ships /usr/local/bin/gosu compiled with Go 1.24.6. gosu executes only local privilege-drop syscalls (setuid/setgid/execve) at container entrypoint startup on the internal data_net network and never invokes Go crypto/tls, net/http, net/mail, mime, or xml packages."
     },
     {
       "imageRole": "postgres",
       "kind": "secret",
       "target": "/etc/ssl/private/ssl-cert-snakeoil.key",
       "ruleId": "private-key",
-      "reviewedAt": "2026-11-21",
+      "reviewedAt": "2026-11-23",
       "reviewedBy": "KontentWave",
       "expiresOn": "2027-02-19",
       "docRef": ".github/docs/runbook.md#4-dependency-and-container-vulnerability-policy",
-      "rationale": "Stock Debian ssl-cert package placeholder snakeoil key baked into official debian:bookworm / postgres:17-bookworm base layers; PostgreSQL runs unexposed on Docker internal:true data_net and never uses this snakeoil key for public or client TLS."
+      "rationale": "Stock Debian ssl-cert package placeholder snakeoil key baked into official debian:bookworm / postgres:19-bookworm base layers; PostgreSQL runs unexposed on Docker internal:true data_net and never uses this snakeoil key for public or client TLS."
     }
   ]
 }

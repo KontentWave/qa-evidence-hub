@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.3.1] - 2026-11-23
 
+### Changed (Dependencies & Container Baselines)
+
+- Upgraded `@testing-library/jest-dom` from `7.0.1` to `8.0.0` (PR `#14`), `nginx` from `1.30-alpine-slim` to `1.31-alpine-slim@sha256:5bfced78d24d644270bedb0a9968697042e38d5c03fb6354603df025279c1cbe` (`nginx/1.31.9`, PR `#16`), and `postgres` from `17-bookworm` to `19-bookworm@sha256:f4859caf96de494e38efa69ed703b08a5bbd9605e152e604f2daec8841c87c41` (`PostgreSQL 19.0`, PR `#15`), updating the Compose volume mount target in `compose.yaml` and `compose.test.yaml` to `/var/lib/postgresql` for PostgreSQL 18+ `PGDATA` cluster layout compatibility.
+
 ### Fixed (`P1-03` Compose Auth Overrides)
 
 - Forwarded `AUTH_PASSWORD_SCRYPT_LN: "${AUTH_PASSWORD_SCRYPT_LN:-16}"` and `AUTH_LOGIN_MAX_ATTEMPTS: "${AUTH_LOGIN_MAX_ATTEMPTS:-5}"` beside `TRUST_PROXY` under `services.api.environment` in `compose.yaml`, and added `AUTH_LOGIN_MAX_ATTEMPTS=5` beside `AUTH_PASSWORD_SCRYPT_LN=16` in `.env.example`, preserving existing API defaults while enabling operator `docker compose --env-file` overrides.

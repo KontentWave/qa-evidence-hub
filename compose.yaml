@@ -15,7 +15,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-qaeh_app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     networks:
       - data_net
     healthcheck:
