@@ -30,6 +30,19 @@ export function trimRequiredText(value: unknown): unknown {
   return typeof value === 'string' ? value.trim() : value;
 }
 
+export function parseStrictIntegerQuery(value: unknown): unknown {
+  if (value === undefined || typeof value === 'number') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (/^-?\d+$/.test(trimmed)) {
+      return Number(trimmed);
+    }
+  }
+  return value;
+}
+
 export function trimOptionalTextToNull(value: unknown): unknown {
   if (value === undefined || value === null) {
     return null;
@@ -41,7 +54,18 @@ export function trimOptionalTextToNull(value: unknown): unknown {
   return value;
 }
 
-export function parseStrictIsoTimestamp(value: unknown): Date | null {
+export interface ParsedStrictIsoInstant {
+  readonly date: Date;
+  readonly epochMicros: bigint;
+}
+
+function floorDivMicrosToMillis(epochMicros: bigint): number {
+  const quotient = epochMicros / 1000n;
+  const remainder = epochMicros % 1000n;
+  return Number(remainder < 0n ? quotient - 1n : quotient);
+}
+
+export function parseStrictIsoInstant(value: unknown): ParsedStrictIsoInstant | null {
   if (typeof value !== 'string') {
     return null;
   }
@@ -63,7 +87,7 @@ export function parseStrictIsoTimestamp(value: unknown): Date | null {
   const offsetHours = match[10] !== undefined ? Number(match[10]) : 0;
   const offsetMinutes = match[11] !== undefined ? Number(match[11]) : 0;
 
-  if (month < 1 || month > 12) {
+  if (year < 1 || month < 1 || month > 12) {
     return null;
   }
   const maxDay = daysInGregorianMonth(year, month);
@@ -77,15 +101,23 @@ export function parseStrictIsoTimestamp(value: unknown): Date | null {
     return null;
   }
 
-  const millis = rawFraction.length > 0 ? Number(rawFraction.padEnd(3, '0').slice(0, 3)) : 0;
-  const baseUtcMs = Date.UTC(year, month - 1, day, hour, minute, second, millis);
-  const offsetTotalMs =
-    tzToken === 'Z'
-      ? 0
-      : (offsetSign === '-' ? -1 : 1) * (offsetHours * 60 + offsetMinutes) * 60_000;
+  const wallUtc = new Date(0);
+  wallUtc.setUTCFullYear(year, month - 1, day);
+  wallUtc.setUTCHours(hour, minute, second, 0);
 
-  const parsed = new Date(baseUtcMs - offsetTotalMs);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  const microsPart = rawFraction.length > 0 ? BigInt(rawFraction.padEnd(6, '0')) : 0n;
+  const offsetMicros =
+    tzToken === 'Z'
+      ? 0n
+      : (offsetSign === '-' ? -1n : 1n) * BigInt(offsetHours * 60 + offsetMinutes) * 60_000_000n;
+  const epochMicros = BigInt(wallUtc.getTime()) * 1000n + microsPart - offsetMicros;
+  const date = new Date(floorDivMicrosToMillis(epochMicros));
+
+  return { date, epochMicros };
+}
+
+export function parseStrictIsoTimestamp(value: unknown): Date | null {
+  return parseStrictIsoInstant(value)?.date ?? null;
 }
 
 export function IsStrictIsoTimestamp(validationOptions?: ValidationOptions): PropertyDecorator {
@@ -97,7 +129,7 @@ export function IsStrictIsoTimestamp(validationOptions?: ValidationOptions): Pro
       options: validationOptions,
       validator: {
         validate(value: unknown): boolean {
-          return parseStrictIsoTimestamp(value) !== null;
+          return parseStrictIsoInstant(value) !== null;
         },
         defaultMessage(): string {
           return 'Must be a valid ISO-8601 date-time with explicit UTC or numeric offset.';

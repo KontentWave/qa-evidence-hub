@@ -557,6 +557,29 @@
               "example": "22222222-3333-4444-8555-666666666666",
               "type": "string"
             }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque cursor from a previous page nextCursor to fetch older sessions",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of sessions to return per page (1 to 200, default 200)",
+            "schema": {
+              "minimum": 1,
+              "maximum": 200,
+              "default": 200,
+              "type": "number"
+            }
           }
         ],
         "responses": {
@@ -571,7 +594,7 @@
             }
           },
           "400": {
-            "description": "Invalid project ID format"
+            "description": "Invalid project ID, cursor, limit, or undeclared query parameter"
           },
           "401": {
             "description": "Authentication is required"
@@ -1133,10 +1156,17 @@
             "items": {
               "$ref": "#/components/schemas/SessionDto"
             }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true,
+            "description": "Opaque cursor for fetching older sessions, or null when no older sessions remain",
+            "example": null
           }
         },
         "required": [
-          "items"
+          "items",
+          "nextCursor"
         ]
       }
     }

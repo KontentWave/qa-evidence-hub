@@ -85,40 +85,101 @@ describe('P1-04 Next.js engagement pages and accessible forms', () => {
         updatedAt: '2026-10-06T08:30:00.000Z',
       },
     });
-    vi.spyOn(apiModule, 'fetchProjectSessionsForOwner').mockResolvedValue({
-      kind: 'ok',
-      data: [
-        {
-          id: SESSION_ID,
-          projectId: PROJECT_ID,
-          purpose: 'Checkout regression',
-          startedAt: '2026-10-06T09:00:00.000Z',
-          endedAt: '2026-10-06T10:30:00.000Z',
-          environment: 'staging',
-          device: 'Desktop',
-          os: 'Linux',
-          browser: 'Firefox 132',
-          buildVersion: '2026.10.06',
-          notes: 'Checked order totals',
-          createdAt: '2026-10-06T09:00:00.000Z',
-          updatedAt: '2026-10-06T09:00:00.000Z',
+    const sessionsFetchSpy = vi
+      .spyOn(apiModule, 'fetchProjectSessionsForOwner')
+      .mockResolvedValue({
+        kind: 'ok',
+        data: {
+          items: [
+            {
+              id: SESSION_ID,
+              projectId: PROJECT_ID,
+              purpose: 'Checkout regression',
+              startedAt: '2026-10-06T09:00:00.000Z',
+              endedAt: '2026-10-06T10:30:00.000Z',
+              environment: 'staging',
+              device: 'Desktop',
+              os: 'Linux',
+              browser: 'Firefox 132',
+              buildVersion: '2026.10.06',
+              notes: 'Checked order totals',
+              createdAt: '2026-10-06T09:00:00.000Z',
+              updatedAt: '2026-10-06T09:00:00.000Z',
+            },
+          ],
+          nextCursor: 'cursor_token_next_page_123',
         },
-      ],
-    });
+      });
 
     const projectUi = await ProjectDetailPage({
       params: Promise.resolve({ clientId: CLIENT_ID, projectId: PROJECT_ID }),
     });
     render(projectUi);
 
+    expect(sessionsFetchSpy).toHaveBeenCalledWith(PROJECT_ID, 'a'.repeat(43), undefined);
     expect(screen.getByRole('heading', { level: 1, name: 'Checkout QA' })).toBeTruthy();
     expect(screen.getByText('Status: Active')).toBeTruthy();
     const sessionLink = screen.getByRole('link', { name: 'Checkout regression' });
     expect(sessionLink.getAttribute('href')).toBe(
       `/clients/${CLIENT_ID}/projects/${PROJECT_ID}/sessions/${SESSION_ID}`,
     );
+    const olderLink = screen.getByRole('link', { name: 'Older sessions' });
+    expect(olderLink.getAttribute('href')).toBe(
+      `/clients/${CLIENT_ID}/projects/${PROJECT_ID}?cursor=cursor_token_next_page_123`,
+    );
+    expect(screen.queryByRole('link', { name: 'Newest sessions' })).toBeNull();
     // 09:00Z -> 11:00 CEST in Europe/Bratislava
     expect(screen.getByText('2026-10-06 11:00 (Europe/Bratislava)')).toBeTruthy();
+
+    cleanup();
+
+    // Older page forwards cursor and renders "Newest sessions" without "Older sessions" when nextCursor is null
+    sessionsFetchSpy.mockResolvedValueOnce({
+      kind: 'ok',
+      data: {
+        items: [
+          {
+            id: SESSION_ID,
+            projectId: PROJECT_ID,
+            purpose: 'Backdated session',
+            startedAt: '2026-09-15T12:30:00.000Z',
+            endedAt: null,
+            environment: null,
+            device: null,
+            os: null,
+            browser: null,
+            buildVersion: null,
+            notes: null,
+            createdAt: '2026-10-06T09:00:00.000Z',
+            updatedAt: '2026-10-06T09:00:00.000Z',
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+
+    const olderPageUi = await ProjectDetailPage({
+      params: Promise.resolve({ clientId: CLIENT_ID, projectId: PROJECT_ID }),
+      searchParams: Promise.resolve({ cursor: 'cursor_token_next_page_123' }),
+    });
+    render(olderPageUi);
+
+    expect(sessionsFetchSpy).toHaveBeenLastCalledWith(PROJECT_ID, 'a'.repeat(43), {
+      cursor: 'cursor_token_next_page_123',
+    });
+    expect(screen.getByRole('link', { name: 'Backdated session' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Newest sessions' }).getAttribute('href')).toBe(
+      `/clients/${CLIENT_ID}/projects/${PROJECT_ID}`,
+    );
+    expect(screen.queryByRole('link', { name: 'Older sessions' })).toBeNull();
+
+    // Blank or array cursor searchParam triggers Next.js notFound()
+    await expect(
+      ProjectDetailPage({
+        params: Promise.resolve({ clientId: CLIENT_ID, projectId: PROJECT_ID }),
+        searchParams: Promise.resolve({ cursor: '   ' }),
+      }),
+    ).rejects.toThrow('NEXT_HTTP_ERROR_FALLBACK;404');
 
     cleanup();
 
@@ -404,5 +465,65 @@ describe('P1-04 Next.js engagement pages and accessible forms', () => {
         csrf: 'csrf_token_p104_valid_123456789012345',
       }),
     ]);
+  });
+
+  it('forwards cursor and limit in fetchProjectSessionsForOwner with no-store and qaeh_session-only cookie', async () => {
+    const seenRequests: Array<{
+      url: string;
+      cache: RequestCache | undefined;
+      cookie: string | null;
+    }> = [];
+
+    const ssrFetchMock = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      const hdrs = new Headers(init?.headers);
+      seenRequests.push({
+        url,
+        cache: init?.cache,
+        cookie: hdrs.get('cookie'),
+      });
+      return new Response(
+        JSON.stringify({
+          items: [],
+          nextCursor: null,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      );
+    });
+
+    const token = 's'.repeat(43);
+    const validRes = await apiModule.fetchProjectSessionsForOwner(
+      PROJECT_ID,
+      token,
+      { cursor: 'valid_cursor_token_123', limit: 50 },
+      ssrFetchMock,
+    );
+    expect(validRes).toEqual({
+      kind: 'ok',
+      data: { items: [], nextCursor: null },
+    });
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.url).toContain(
+      `/api/v1/projects/${PROJECT_ID}/sessions?cursor=valid_cursor_token_123&limit=50`,
+    );
+    expect(seenRequests[0]?.cache).toBe('no-store');
+    expect(seenRequests[0]?.cookie).toBe(`qaeh_session=${token}`);
+
+    const badCursorRes = await apiModule.fetchProjectSessionsForOwner(
+      PROJECT_ID,
+      token,
+      { cursor: 'bad cursor with spaces!' },
+      ssrFetchMock,
+    );
+    expect(badCursorRes).toEqual({ kind: 'not_found' });
+    expect(seenRequests).toHaveLength(1);
   });
 });

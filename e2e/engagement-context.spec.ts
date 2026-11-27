@@ -1,7 +1,109 @@
-import { expect, test } from '@playwright/test';
+import { test as base, expect, request as playwrightRequest } from '@playwright/test';
 
 const ownerLogin = process.env.E2E_OWNER_LOGIN ?? 'owner@synthetic.invalid';
 const ownerPassword = process.env.E2E_OWNER_PASSWORD ?? 'SyntheticOwnerPass!2026#Valid';
+
+interface SeededProjectFixture {
+  readonly clientId: string;
+  readonly projectId: string;
+  readonly projectName: string;
+}
+
+const test = base.extend<{
+  seedProjectWithNewerSessions: (count: number) => Promise<SeededProjectFixture>;
+}>({
+  seedProjectWithNewerSessions: async ({ baseURL }, use) => {
+    const origin = baseURL ?? 'http://127.0.0.1:8080';
+    await use(async (count: number) => {
+      const api = await playwrightRequest.newContext({ baseURL: origin });
+      try {
+        const csrfBootstrap = await api.get('/api/v1/auth/csrf');
+        expect(csrfBootstrap.status()).toBe(200);
+        const { csrfToken: preLoginCsrf } = (await csrfBootstrap.json()) as { csrfToken: string };
+
+        const loginRes = await api.post('/api/v1/auth/login', {
+          headers: {
+            origin,
+            'x-csrf-token': preLoginCsrf,
+          },
+          data: {
+            loginIdentifier: ownerLogin,
+            password: ownerPassword,
+          },
+        });
+        expect(loginRes.status()).toBe(200);
+        const { csrfToken } = (await loginRes.json()) as { csrfToken: string };
+
+        const clientRes = await api.post('/api/v1/clients', {
+          headers: {
+            origin,
+            'x-csrf-token': csrfToken,
+          },
+          data: {
+            name: 'Paginated Client',
+            notes: 'Synthetic fixture client for >200 session pagination',
+          },
+        });
+        expect(clientRes.status()).toBe(201);
+        const { id: clientId } = (await clientRes.json()) as { id: string };
+
+        const projectName = 'Paginated Checkout QA';
+        const projectRes = await api.post(`/api/v1/clients/${clientId}/projects`, {
+          headers: {
+            origin,
+            'x-csrf-token': csrfToken,
+          },
+          data: {
+            name: projectName,
+            description: 'Synthetic project seeded with 200 newer sessions',
+          },
+        });
+        expect(projectRes.status()).toBe(201);
+        const { id: projectId } = (await projectRes.json()) as { id: string };
+
+        const baseStartedMs = Date.parse('2026-10-15T09:00:00.000Z');
+        const batchSize = 8;
+        for (let offset = 0; offset < count; offset += batchSize) {
+          const batchIndices = Array.from(
+            { length: Math.min(batchSize, count - offset) },
+            (_, idx) => offset + idx,
+          );
+          await Promise.all(
+            batchIndices.map(async (index) => {
+              // Pair adjacent sessions on identical minute start times to exercise tie ordering too.
+              const startedIso = new Date(
+                baseStartedMs + Math.floor(index / 2) * 60_000,
+              ).toISOString();
+              const sessionRes = await api.post(`/api/v1/projects/${projectId}/sessions`, {
+                headers: {
+                  origin,
+                  'x-csrf-token': csrfToken,
+                },
+                data: {
+                  purpose: `Newer regression run #${String(index + 1).padStart(3, '0')}`,
+                  startedAt: startedIso,
+                  environment: 'staging',
+                },
+              });
+              expect(sessionRes.status()).toBe(201);
+            }),
+          );
+        }
+
+        await api.post('/api/v1/auth/logout', {
+          headers: {
+            origin,
+            'x-csrf-token': csrfToken,
+          },
+        });
+
+        return { clientId, projectId, projectName };
+      } finally {
+        await api.dispose();
+      }
+    });
+  },
+});
 
 test.describe('@P1-04 @S1 @AC01 @AC07 @browser Nginx engagement context workflow', () => {
   test('creates client, active project, and test session, focuses error summary while preserving inputs on invalid time range, reopens saved details after reload, and redirects anonymous project page to /login', async ({
@@ -170,6 +272,127 @@ test.describe('@P1-04 @S1 @AC01 @AC07 @browser Nginx engagement context workflow
       page.getByRole('heading', { level: 1, name: 'Sign in to QA Evidence Hub' }),
     ).toBeVisible();
     await expect(page.getByText('Checkout QA')).toHaveCount(0);
+
+    expect(ssrSetCookieViolations).toEqual([]);
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test('reaches a backdated 201st session created through the form via keyboard-accessible "Older sessions" link after seeding 200 newer sessions', async ({
+    page,
+    seedProjectWithNewerSessions,
+  }) => {
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    const ssrSetCookieViolations: string[] = [];
+
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        consoleErrors.push(msg.text());
+      }
+    });
+    page.on('pageerror', (err) => {
+      pageErrors.push(err.message);
+    });
+    page.on('response', (res) => {
+      const parsed = new URL(res.url());
+      if (
+        res.request().method() === 'GET' &&
+        (parsed.pathname === '/clients' || parsed.pathname.startsWith('/clients/')) &&
+        res.status() === 200
+      ) {
+        const setCookie = res.headers()['set-cookie'];
+        if (setCookie) {
+          ssrSetCookieViolations.push(`${parsed.pathname}${parsed.search}: ${setCookie}`);
+        }
+      }
+    });
+
+    // 1. Seed 200 newer sessions through Nginx using the Playwright fixture.
+    const seeded = await seedProjectWithNewerSessions(200);
+    const projectPagePath = `/clients/${seeded.clientId}/projects/${seeded.projectId}`;
+
+    // 2. Sign in and open the project page.
+    await page.goto('/login');
+    await page.getByLabel('Login identifier', { exact: true }).fill(ownerLogin);
+    await page.getByLabel('Password', { exact: true }).fill(ownerPassword);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await page.waitForURL((u) => u.pathname === '/');
+
+    await page.goto(projectPagePath);
+    await expect(
+      page.getByRole('heading', { level: 1, name: seeded.projectName }),
+    ).toBeVisible();
+    // With exactly 200 sessions, there is no 201st older session yet.
+    await expect(page.getByRole('link', { name: 'Older sessions', exact: true })).toHaveCount(0);
+
+    // 3. Create a backdated 201st session through the project form.
+    const backdatedPurpose = 'Backdated kick-off baseline';
+    await page.getByLabel('Purpose', { exact: true }).fill(backdatedPurpose);
+    await page
+      .getByLabel('Start time (Europe/Bratislava)', { exact: true })
+      .fill('2026-09-15T14:30');
+    await page.getByLabel('Environment (optional)', { exact: true }).fill('staging');
+
+    const createPostPromise = page.waitForResponse(
+      (res) =>
+        res.request().method() === 'POST' &&
+        new URL(res.url()).pathname === `/api/v1/projects/${seeded.projectId}/sessions`,
+    );
+
+    await page.getByRole('button', { name: 'Create session' }).click();
+    const createPostRes = await createPostPromise;
+    expect(createPostRes.status()).toBe(201);
+    // Wait until CreateSessionForm's window.location.assign reload finishes rendering the 201-session page.
+    await expect(page.getByRole('link', { name: 'Older sessions', exact: true })).toBeVisible();
+    await page.waitForLoadState('load');
+
+    // 4. Visit the project afresh, verify the first 200 newest sessions omit the backdated 201st session, and follow "Older sessions" via keyboard.
+    await page.goto('/clients');
+    await expect(page.getByRole('heading', { level: 1, name: 'Clients' })).toBeVisible();
+    const freshVisitRes = await page.goto(projectPagePath);
+    expect(freshVisitRes).not.toBeNull();
+    expect(freshVisitRes!.status()).toBe(200);
+    expect(freshVisitRes!.headers()['cache-control']).toBe('private, no-store, no-transform');
+    expect(freshVisitRes!.headers()['x-content-type-options']).toBe('nosniff');
+
+    await expect(page.getByRole('link', { name: backdatedPurpose, exact: true })).toHaveCount(0);
+
+    const olderSessionsLink = page.getByRole('link', { name: 'Older sessions', exact: true });
+    await expect(olderSessionsLink).toBeVisible();
+    await olderSessionsLink.focus();
+    await expect(olderSessionsLink).toBeFocused();
+    await page.keyboard.press('Enter');
+
+    await page.waitForURL(
+      (u) => u.pathname === projectPagePath && Boolean(u.searchParams.get('cursor')),
+    );
+
+    // 5. Open the backdated 201st session from the older-sessions page and reload.
+    await expect(page.getByRole('link', { name: 'Older sessions', exact: true })).toHaveCount(0);
+    const backdatedSessionLink = page.getByRole('link', { name: backdatedPurpose, exact: true });
+    await expect(backdatedSessionLink).toBeVisible();
+    await expect(page.getByText('2026-09-15 14:30 (Europe/Bratislava)')).toBeVisible();
+
+    await backdatedSessionLink.click();
+    await page.waitForURL(
+      new RegExp(
+        `^.*/clients/${seeded.clientId}/projects/${seeded.projectId}/sessions/[0-9a-f-]{36}$`,
+        'i',
+      ),
+    );
+
+    const reloadRes = await page.reload();
+    expect(reloadRes).not.toBeNull();
+    expect(reloadRes!.status()).toBe(200);
+    expect(reloadRes!.headers()['cache-control']).toBe('private, no-store, no-transform');
+    expect(reloadRes!.headers()['x-content-type-options']).toBe('nosniff');
+
+    // 6. Assert saved purpose and start time after reload.
+    await expect(page.getByRole('heading', { level: 1, name: backdatedPurpose })).toBeVisible();
+    await expect(page.getByText('2026-09-15 14:30 (Europe/Bratislava)')).toBeVisible();
+    await expect(page.locator('time[datetime="2026-09-15T12:30:00.000Z"]')).toHaveCount(1);
+    await expect(page.getByText('staging', { exact: true })).toBeVisible();
 
     expect(ssrSetCookieViolations).toEqual([]);
     expect(consoleErrors).toEqual([]);

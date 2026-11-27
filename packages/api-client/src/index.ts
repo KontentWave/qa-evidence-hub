@@ -19,6 +19,9 @@ export type CreateProjectRequest = components['schemas']['CreateProjectDto'];
 export type ProjectSummary = components['schemas']['ProjectDto'];
 export type ProjectListResponse = components['schemas']['ProjectListResponseDto'];
 export type CreateSessionRequest = components['schemas']['CreateSessionDto'];
+export type ListProjectSessionsQuery = NonNullable<
+  paths['/api/v1/projects/{projectId}/sessions']['get']['parameters']['query']
+>;
 export type TestSessionSummary = components['schemas']['SessionDto'];
 export type TestSessionListResponse = components['schemas']['SessionListResponseDto'];
 

@@ -640,4 +640,334 @@ describe('P1-04 Engagement Context PostgreSQL constraints and API integration', 
     expect(archivedSessionRes.status).toBe(409);
     expect(archivedSessionRes.body.code).toBe('CONFLICT');
   });
+
+  it('rejects sub-millisecond reversed session time ranges while accepting swapped values, equal instants across offsets, and omitted endedAt', async () => {
+    const { jar, csrfToken } = await signInOwner();
+
+    const clientRes = await request(app.getHttpServer())
+      .post('/api/v1/clients')
+      .set('Origin', APP_ORIGIN)
+      .set('Cookie', cookieHeader(jar))
+      .set('X-CSRF-Token', csrfToken)
+      .send({ name: 'Precision Client' });
+    expect(clientRes.status).toBe(201);
+
+    const projectRes = await request(app.getHttpServer())
+      .post(`/api/v1/clients/${clientRes.body.id as string}/projects`)
+      .set('Origin', APP_ORIGIN)
+      .set('Cookie', cookieHeader(jar))
+      .set('X-CSRF-Token', csrfToken)
+      .send({ name: 'Precision Project' });
+    expect(projectRes.status).toBe(201);
+    const projectId = projectRes.body.id as string;
+
+    async function countProjectSessions(): Promise<number> {
+      const db = new pg.Client({ connectionString: databaseUrl });
+      await db.connect();
+      try {
+        const res = await db.query<{ count: string }>(
+          'SELECT COUNT(*)::text AS count FROM "test_sessions" WHERE "project_id" = $1;',
+          [projectId],
+        );
+        return Number(res.rows[0]?.count ?? '0');
+      } finally {
+        await db.end();
+      }
+    }
+
+    expect(await countProjectSessions()).toBe(0);
+
+    // 1. Sub-millisecond reversed range must fail with HTTP 400 + endedAt fieldError and leave session count unchanged.
+    const reversedSubMsRes = await request(app.getHttpServer())
+      .post(`/api/v1/projects/${projectId}/sessions`)
+      .set('Origin', APP_ORIGIN)
+      .set('Cookie', cookieHeader(jar))
+      .set('X-CSRF-Token', csrfToken)
+      .send({
+        purpose: 'Sub-millisecond reversed range',
+        startedAt: '2026-11-27T10:00:00.123900Z',
+        endedAt: '2026-11-27T10:00:00.123100Z',
+      });
+    expect(reversedSubMsRes.status).toBe(400);
+    expect(reversedSubMsRes.body.fieldErrors).toEqual([
+      expect.objectContaining({ field: 'endedAt' }),
+    ]);
+    expect(await countProjectSessions()).toBe(0);
+
+    // 2. Swapping the two sub-millisecond values succeeds.
+    const swappedSubMsRes = await request(app.getHttpServer())
+      .post(`/api/v1/projects/${projectId}/sessions`)
+      .set('Origin', APP_ORIGIN)
+      .set('Cookie', cookieHeader(jar))
+      .set('X-CSRF-Token', csrfToken)
+      .send({
+        purpose: 'Sub-millisecond forward range',
+        startedAt: '2026-11-27T10:00:00.123100Z',
+        endedAt: '2026-11-27T10:00:00.123900Z',
+      });
+    expect(swappedSubMsRes.status).toBe(201);
+    expect(await countProjectSessions()).toBe(1);
+
+    // 3. Equal instants expressed with different UTC offsets (including 6 fractional digits) succeed.
+    const equalInstantOffsetsRes = await request(app.getHttpServer())
+      .post(`/api/v1/projects/${projectId}/sessions`)
+      .set('Origin', APP_ORIGIN)
+      .set('Cookie', cookieHeader(jar))
+      .set('X-CSRF-Token', csrfToken)
+      .send({
+        purpose: 'Equal instant across offsets',
+        startedAt: '2026-11-27T12:00:00.123456+02:00',
+        endedAt: '2026-11-27T04:30:00.123456-05:30',
+      });
+    expect(equalInstantOffsetsRes.status).toBe(201);
+    expect(await countProjectSessions()).toBe(2);
+
+    // 4. endedAt remains optional (omitted and null both succeed).
+    const omittedEndRes = await request(app.getHttpServer())
+      .post(`/api/v1/projects/${projectId}/sessions`)
+      .set('Origin', APP_ORIGIN)
+      .set('Cookie', cookieHeader(jar))
+      .set('X-CSRF-Token', csrfToken)
+      .send({
+        purpose: 'Open session without endedAt',
+        startedAt: '2026-11-27T10:00:00.123900Z',
+      });
+    expect(omittedEndRes.status).toBe(201);
+    expect(omittedEndRes.body.endedAt).toBeNull();
+    expect(await countProjectSessions()).toBe(3);
+  });
+
+  it('paginates project sessions with bounded cursors, preserving startedAt/createdAt/id DESC order without gaps or duplicates across tied start times and >200 sessions', async () => {
+    const { jar, csrfToken } = await signInOwner();
+
+    const clientRes = await request(app.getHttpServer())
+      .post('/api/v1/clients')
+      .set('Origin', APP_ORIGIN)
+      .set('Cookie', cookieHeader(jar))
+      .set('X-CSRF-Token', csrfToken)
+      .send({ name: 'Pagination Client' });
+    expect(clientRes.status).toBe(201);
+    const clientId = clientRes.body.id as string;
+
+    const projectRes = await request(app.getHttpServer())
+      .post(`/api/v1/clients/${clientId}/projects`)
+      .set('Origin', APP_ORIGIN)
+      .set('Cookie', cookieHeader(jar))
+      .set('X-CSRF-Token', csrfToken)
+      .send({ name: 'Pagination Project' });
+    expect(projectRes.status).toBe(201);
+    const projectId = projectRes.body.id as string;
+
+    const otherProjectRes = await request(app.getHttpServer())
+      .post(`/api/v1/clients/${clientId}/projects`)
+      .set('Origin', APP_ORIGIN)
+      .set('Cookie', cookieHeader(jar))
+      .set('X-CSRF-Token', csrfToken)
+      .send({ name: 'Other Project' });
+    expect(otherProjectRes.status).toBe(201);
+    const otherProjectId = otherProjectRes.body.id as string;
+
+    // Seed 7 sessions including tied startedAt values (with sub-millisecond createdAt differences AND identical createdAt broken by id DESC), plus 1 session on another project.
+    const expectedOrderIds = [
+      '90000000-0000-4000-8000-000000000007', // newest startedAt
+      '90000000-0000-4000-8000-000000000006', // tied startedAt T1, createdAt .500800Z
+      '90000000-0000-4000-8000-000000000005', // tied startedAt T1, createdAt .500200Z (same ms as #6!)
+      '90000000-0000-4000-8000-000000000004', // tied startedAt T1, identical createdAt .400000Z, higher UUID
+      '90000000-0000-4000-8000-000000000003', // tied startedAt T1, identical createdAt .400000Z, lower UUID
+      '90000000-0000-4000-8000-000000000002', // tied startedAt T1, older createdAt .100000Z
+      '90000000-0000-4000-8000-000000000001', // oldest backdated startedAt
+    ];
+
+    const db = new pg.Client({ connectionString: databaseUrl });
+    await db.connect();
+    try {
+      const seedRows: ReadonlyArray<{
+        id: string;
+        projId: string;
+        purpose: string;
+        startedAt: string;
+        createdAt: string;
+      }> = [
+        {
+          id: expectedOrderIds[0]!,
+          projId: projectId,
+          purpose: 'Newest run',
+          startedAt: '2026-10-10T12:00:00.000000Z',
+          createdAt: '2026-11-27T10:00:01.000000Z',
+        },
+        {
+          id: expectedOrderIds[1]!,
+          projId: projectId,
+          purpose: 'Tied start sub-ms newer created',
+          startedAt: '2026-10-08T09:00:00.000000Z',
+          createdAt: '2026-11-27T10:00:00.500800Z',
+        },
+        {
+          id: expectedOrderIds[2]!,
+          projId: projectId,
+          purpose: 'Tied start sub-ms older created',
+          startedAt: '2026-10-08T09:00:00.000000Z',
+          createdAt: '2026-11-27T10:00:00.500200Z',
+        },
+        {
+          id: expectedOrderIds[3]!,
+          projId: projectId,
+          purpose: 'Tied start and created higher id',
+          startedAt: '2026-10-08T09:00:00.000000Z',
+          createdAt: '2026-11-27T10:00:00.400000Z',
+        },
+        {
+          id: expectedOrderIds[4]!,
+          projId: projectId,
+          purpose: 'Tied start and created lower id',
+          startedAt: '2026-10-08T09:00:00.000000Z',
+          createdAt: '2026-11-27T10:00:00.400000Z',
+        },
+        {
+          id: expectedOrderIds[5]!,
+          projId: projectId,
+          purpose: 'Tied start earliest created',
+          startedAt: '2026-10-08T09:00:00.000000Z',
+          createdAt: '2026-11-27T10:00:00.100000Z',
+        },
+        {
+          id: expectedOrderIds[6]!,
+          projId: projectId,
+          purpose: 'Backdated baseline',
+          startedAt: '2026-09-15T09:00:00.000000Z',
+          createdAt: '2026-11-27T11:00:00.000000Z',
+        },
+        {
+          id: '90000000-0000-4000-8000-999999999999',
+          projId: otherProjectId,
+          purpose: 'Unrelated project session',
+          startedAt: '2026-10-08T09:00:00.000000Z',
+          createdAt: '2026-11-27T10:00:00.450000Z',
+        },
+      ];
+
+      for (const row of seedRows) {
+        await db.query(
+          `INSERT INTO "test_sessions" ("id", "project_id", "purpose", "started_at", "created_at", "updated_at")
+           VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz, $5::timestamptz);`,
+          [row.id, row.projId, row.purpose, row.startedAt, row.createdAt],
+        );
+      }
+    } finally {
+      await db.end();
+    }
+
+    // Walk all pages with limit=2 (crossing right through the sub-ms createdAt tie and identical createdAt tie!).
+    const collectedIds: string[] = [];
+    let cursor: string | null = null;
+    let pageCount = 0;
+
+    do {
+      const querySuffix = cursor
+        ? `?limit=2&cursor=${encodeURIComponent(cursor)}`
+        : '?limit=2';
+      const pageRes = await request(app.getHttpServer())
+        .get(`/api/v1/projects/${projectId}/sessions${querySuffix}`)
+        .set('Cookie', cookieHeader(jar));
+
+      expect(pageRes.status).toBe(200);
+      expect(pageRes.headers['cache-control']).toBe('private, no-store, no-transform');
+      expect(pageRes.headers['x-content-type-options']).toBe('nosniff');
+      expect(pageRes.headers['set-cookie']).toBeUndefined();
+
+      const pageItems = pageRes.body.items as Array<{ id: string; projectId: string }>;
+      expect(pageItems.length).toBeGreaterThan(0);
+      expect(pageItems.length).toBeLessThanOrEqual(2);
+      for (const item of pageItems) {
+        expect(item.projectId).toBe(projectId);
+        collectedIds.push(item.id);
+      }
+
+      cursor = pageRes.body.nextCursor as string | null;
+      pageCount += 1;
+      expect(pageCount).toBeLessThanOrEqual(10);
+    } while (cursor !== null);
+
+    expect(pageCount).toBe(4);
+    expect(new Set(collectedIds).size).toBe(expectedOrderIds.length);
+    expect(collectedIds).toEqual(expectedOrderIds);
+
+    // Seed 194 more newer sessions so total in projectId is 201, proving default 200-item page + nextCursor reaches the 201st backdated session.
+    const bulkDb = new pg.Client({ connectionString: databaseUrl });
+    await bulkDb.connect();
+    try {
+      await bulkDb.query(
+        `INSERT INTO "test_sessions" ("id", "project_id", "purpose", "started_at", "created_at", "updated_at")
+         SELECT
+           ('80000000-0000-4000-8000-' || lpad(gs::text, 12, '0'))::uuid,
+           $1::uuid,
+           'Seeded newer session ' || gs::text,
+           TIMESTAMPTZ '2026-10-20T00:00:00Z' + (gs * INTERVAL '1 minute'),
+           TIMESTAMPTZ '2026-11-27T12:00:00Z' + (gs * INTERVAL '1 millisecond'),
+           TIMESTAMPTZ '2026-11-27T12:00:00Z' + (gs * INTERVAL '1 millisecond')
+         FROM generate_series(1, 194) AS gs;`,
+        [projectId],
+      );
+    } finally {
+      await bulkDb.end();
+    }
+
+    const firstDefaultPage = await request(app.getHttpServer())
+      .get(`/api/v1/projects/${projectId}/sessions`)
+      .set('Cookie', cookieHeader(jar));
+    expect(firstDefaultPage.status).toBe(200);
+    expect(firstDefaultPage.body.items).toHaveLength(200);
+    expect(typeof firstDefaultPage.body.nextCursor).toBe('string');
+    expect(
+      (firstDefaultPage.body.items as Array<{ id: string }>).some(
+        (s) => s.id === expectedOrderIds[6],
+      ),
+    ).toBe(false);
+
+    const secondDefaultPage = await request(app.getHttpServer())
+      .get(
+        `/api/v1/projects/${projectId}/sessions?cursor=${encodeURIComponent(
+          firstDefaultPage.body.nextCursor as string,
+        )}`,
+      )
+      .set('Cookie', cookieHeader(jar));
+    expect(secondDefaultPage.status).toBe(200);
+    expect(secondDefaultPage.body.items).toHaveLength(1);
+    expect(secondDefaultPage.body.items[0].id).toBe(expectedOrderIds[6]);
+    expect(secondDefaultPage.body.items[0].purpose).toBe('Backdated baseline');
+    expect(secondDefaultPage.body.nextCursor).toBeNull();
+
+    // Bounded query validation, auth, and missing-project checks.
+    for (const badQuery of [
+      '?limit=0',
+      '?limit=201',
+      '?limit=abc',
+      '?cursor=',
+      '?cursor=not-a-valid-cursor',
+      '?undeclared=1',
+    ]) {
+      const badRes = await request(app.getHttpServer())
+        .get(`/api/v1/projects/${projectId}/sessions${badQuery}`)
+        .set('Cookie', cookieHeader(jar));
+      expect(badRes.status, `Expected 400 for ${badQuery}`).toBe(400);
+      expect(badRes.body.fieldErrors?.length).toBeGreaterThan(0);
+    }
+
+    const anonCursorRes = await request(app.getHttpServer()).get(
+      `/api/v1/projects/${projectId}/sessions?cursor=${encodeURIComponent(
+        firstDefaultPage.body.nextCursor as string,
+      )}`,
+    );
+    expect(anonCursorRes.status).toBe(401);
+    expect(anonCursorRes.headers['cache-control']).toBe('private, no-store, no-transform');
+
+    const missingProjectCursorRes = await request(app.getHttpServer())
+      .get(
+        `/api/v1/projects/99999999-9999-4999-8999-999999999999/sessions?cursor=${encodeURIComponent(
+          firstDefaultPage.body.nextCursor as string,
+        )}`,
+      )
+      .set('Cookie', cookieHeader(jar));
+    expect(missingProjectCursorRes.status).toBe(404);
+  });
 });

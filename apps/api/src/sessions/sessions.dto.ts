@@ -2,20 +2,27 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
+  IsInt,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
+  Min,
   MinLength,
   ValidateNested,
 } from 'class-validator';
 import {
+  DEFAULT_DOMAIN_LIST_LIMIT,
   IsStrictIsoTimestamp,
   LONG_TEXT_MAX_LENGTH,
+  parseStrictIntegerQuery,
   SHORT_TEXT_MAX_LENGTH,
   trimOptionalTextToNull,
   trimRequiredText,
 } from '../common/validation.util';
+
+export const SESSION_CURSOR_MAX_LENGTH = 256;
 
 export class ProjectIdParamDto {
   @ApiProperty({ format: 'uuid', example: '22222222-3333-4444-8555-666666666666' })
@@ -177,10 +184,48 @@ export class SessionDto {
   public updatedAt!: string;
 }
 
+export class ListSessionsQueryDto {
+  @ApiPropertyOptional({
+    description: 'Opaque cursor from a previous page nextCursor to fetch older sessions',
+    minLength: 1,
+    maxLength: SESSION_CURSOR_MAX_LENGTH,
+  })
+  @Transform(({ value }: { value: unknown }) =>
+    value === undefined ? undefined : trimRequiredText(value),
+  )
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(SESSION_CURSOR_MAX_LENGTH)
+  public cursor?: string;
+
+  @ApiPropertyOptional({
+    type: Number,
+    minimum: 1,
+    maximum: DEFAULT_DOMAIN_LIST_LIMIT,
+    default: DEFAULT_DOMAIN_LIST_LIMIT,
+    description: 'Maximum number of sessions to return per page (1 to 200, default 200)',
+  })
+  @Transform(({ value }: { value: unknown }) => parseStrictIntegerQuery(value))
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(DEFAULT_DOMAIN_LIST_LIMIT)
+  public limit?: number;
+}
+
 export class SessionListResponseDto {
   @ApiProperty({ type: [SessionDto] })
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => SessionDto)
   public items!: SessionDto[];
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: 'Opaque cursor for fetching older sessions, or null when no older sessions remain',
+    example: null,
+  })
+  public nextCursor!: string | null;
 }

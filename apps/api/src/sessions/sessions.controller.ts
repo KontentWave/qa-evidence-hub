@@ -26,6 +26,7 @@ import { type AuthenticatedActor, CurrentActor } from '../auth/auth.decorators';
 import { EmptyQueryDto } from '../health/health.dto';
 import {
   CreateSessionDto,
+  ListSessionsQueryDto,
   ProjectIdParamDto,
   ProjectSessionParamsDto,
   SessionDto,
@@ -76,15 +77,17 @@ export class SessionsController {
     summary: 'List test sessions belonging to the specified project newest-first',
   })
   @ApiOkResponse({ description: 'Project test session list', type: SessionListResponseDto })
-  @ApiBadRequestResponse({ description: 'Invalid project ID format' })
+  @ApiBadRequestResponse({
+    description: 'Invalid project ID, cursor, limit, or undeclared query parameter',
+  })
   @ApiUnauthorizedResponse({ description: 'Authentication is required' })
   @ApiNotFoundResponse({ description: 'Parent project was not found' })
   public async listSessions(
     @Param() params: ProjectIdParamDto,
-    @Query() _query: EmptyQueryDto,
+    @Query() query: ListSessionsQueryDto,
     @CurrentActor() actor: AuthenticatedActor | undefined,
   ): Promise<SessionListResponseDto> {
-    return this.sessionsService.listSessions(actor, params.projectId);
+    return this.sessionsService.listSessions(actor, params.projectId, query);
   }
 
   @Get(':sessionId')

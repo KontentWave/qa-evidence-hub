@@ -6,6 +6,7 @@ import {
   fetchProjectSessionsForOwner,
   getRawSessionCookie,
   requireAuthenticatedOwner,
+  triggerNotFound,
   unwrapSsrDataOrRedirect,
 } from '../../../../../src/lib/api';
 import { formatUtcInTimeZone } from '../../../../../src/lib/timezone';
@@ -14,22 +15,38 @@ export const dynamic = 'force-dynamic';
 
 export interface ProjectDetailPageProps {
   readonly params: Promise<{ clientId: string; projectId: string }>;
+  readonly searchParams?: Promise<{ cursor?: string | string[] }>;
 }
 
-export default async function ProjectDetailPage({ params }: ProjectDetailPageProps) {
+export default async function ProjectDetailPage({
+  params,
+  searchParams,
+}: ProjectDetailPageProps) {
   const owner = await requireAuthenticatedOwner();
   const { clientId, projectId } = await params;
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
+  const rawCursor = resolvedSearchParams?.cursor;
+
+  if (Array.isArray(rawCursor) || (typeof rawCursor === 'string' && rawCursor.trim().length === 0)) {
+    triggerNotFound();
+  }
+  const activeCursor = typeof rawCursor === 'string' ? rawCursor.trim() : undefined;
+
   const rawToken = await getRawSessionCookie();
 
   const [clientRes, projectRes, sessionsRes] = await Promise.all([
     fetchClientDetailForOwner(clientId, rawToken),
     fetchClientProjectDetailForOwner(clientId, projectId, rawToken),
-    fetchProjectSessionsForOwner(projectId, rawToken),
+    fetchProjectSessionsForOwner(
+      projectId,
+      rawToken,
+      activeCursor ? { cursor: activeCursor } : undefined,
+    ),
   ]);
 
   const client = unwrapSsrDataOrRedirect(clientRes);
   const project = unwrapSsrDataOrRedirect(projectRes);
-  const sessions = unwrapSsrDataOrRedirect(sessionsRes);
+  const sessionPage = unwrapSsrDataOrRedirect(sessionsRes);
 
   if (!client || !project) {
     return (
@@ -125,18 +142,22 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
 
       <section aria-labelledby="sessions-list-heading" className="card">
         <h2 id="sessions-list-heading">Test sessions</h2>
-        {sessions === null ? (
+        {sessionPage === null ? (
           <div className="status-banner status-banner--not-ready" role="alert">
             <p className="status-heading">Unable to load test sessions</p>
             <p className="status-detail">
               The internal API service did not respond. Reload to try again.
             </p>
           </div>
-        ) : sessions.length === 0 ? (
-          <p className="empty-state">No test sessions created for this project yet.</p>
+        ) : sessionPage.items.length === 0 ? (
+          <p className="empty-state">
+            {activeCursor
+              ? 'No older test sessions found for this project.'
+              : 'No test sessions created for this project yet.'}
+          </p>
         ) : (
           <ul className="record-list">
-            {sessions.map((session) => (
+            {sessionPage.items.map((session) => (
               <li className="record-item" key={session.id}>
                 <div className="record-item__header">
                   <a
@@ -166,6 +187,28 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
             ))}
           </ul>
         )}
+        {sessionPage !== null && (activeCursor || sessionPage.nextCursor) ? (
+          <nav aria-label="Test sessions pagination" className="pagination-nav no-print">
+            {activeCursor ? (
+              <a
+                className="pagination-link"
+                href={`/clients/${client.id}/projects/${project.id}`}
+              >
+                Newest sessions
+              </a>
+            ) : null}
+            {sessionPage.nextCursor ? (
+              <a
+                className="pagination-link"
+                href={`/clients/${client.id}/projects/${project.id}?cursor=${encodeURIComponent(
+                  sessionPage.nextCursor,
+                )}`}
+              >
+                Older sessions
+              </a>
+            ) : null}
+          </nav>
+        ) : null}
       </section>
     </main>
   );
