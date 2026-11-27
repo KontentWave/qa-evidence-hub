@@ -9,7 +9,7 @@
 - **Starting working-tree & local Docker volume state:**
   - `git status --short`: `?? .github/skills/` (unrelated local `.github/skills/implement-slice/SKILL.md`, preserved untouched and unstaged throughout).
   - `docker volume ls` & `docker ps -a`: zero `qa-evidence-hub` persistent PostgreSQL 17 volumes present; unrelated local containers and volumes (`9595a0d52a67be275eec9181539d78a0914b182b1ad5044f68cac8fbefbe4ece` on `pg-dj01` `postgres:16`, `freelance-opportunity-triage-platform_mariadb_test_data`) left completely untouched while all database, BDD, container, and Playwright checks ran exclusively on isolated disposable PostgreSQL 19.0 stacks (`compose.test.yaml` / `qaeh_*` projects).
-- **Tested implementation baseline:** `05c38bfb94b4b39ace12385de25d52d17605dc83` (`05c38bf` on `fix/p1-04-session-review` branched from `origin/main` `9f48640`), `git status --short` showing only preserved `?? .github/skills/`.
+- **Tested implementation baseline:** `05c38bfb94b4b39ace12385de25d52d17605dc83` (`05c38bf` implementation + `3fb8088f1f0d285716524438cf6bcf5b0d7419d2` `3fb8088` Playwright post-submit navigation-wait stabilization on `fix/p1-04-session-review` branched from `origin/main` `9f48640`), `git status --short` showing only preserved `?? .github/skills/`.
 - **Verified container image digests on `05c38bf`:**
   - Local verified `apps/api/Dockerfile` (`runner`, `UID 1000`, `Node.js v24.22.3`, fresh `apt-get upgrade`): `sha256:8aa1c08d6fa279593bd7b71f8c151073efc107af24ef0260bfa7e2ae59d05539` (`687.3 MiB`, `720,727,561` bytes; `118.6 MiB` idle)
   - Local verified `apps/web/Dockerfile` (`runner`, `UID 1000`, `Node.js v24.22.3`, fresh `apt-get upgrade`): `sha256:72ec254de9a25c893ab07e9038cd49a9812ecafcbad4a45ab10ba72c48d4324c` (`286.8 MiB`, `300,700,244` bytes; `57.73 MiB` idle)
@@ -84,7 +84,7 @@ Tool versions: `node v24.21.0` (local host) / `v24.22.3` (containers), `corepack
 | `OPT-P101-01` | Optional improvement | Low / Info | `open` | `open` | `Pending owner sign-off` — optional `pnpm deploy` `api` image-size reduction before `P1-11`. |
 
 - **Foundation Gates `F01` & `F02`:** **`PASS` (Owner accepted; all `F01`/`F02` gates retained and green)**.
-- **`P1-04` Implementation & Session Review Remediation Status:** **`Complete`** on synthetic data (`fix/p1-04-session-review`, `05c38bf`).
+- **`P1-04` Implementation & Session Review Remediation Status:** **`Complete`** on synthetic data (`fix/p1-04-session-review`, `05c38bf` + `3fb8088`).
 - **Local Verification Status:** **`PASS`** (`0` open defects; all quality, OpenAPI, `98.47%`/`95.56%` service coverage, `19/19` PG 19 integration, `7/7` BDD, `1/1` `f01-containers`, `3/3` Nginx Playwright, and security/license/blocking checks `exit 0`).
 - **Exact-Commit CI Status:** Verified on PR head commit via all `4` required `ci.yml` status checks.
 - **Owner Acceptance Status:** **`Pending owner sign-off`**.
