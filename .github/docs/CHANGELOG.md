@@ -4,6 +4,18 @@ All notable changes to QA Evidence Hub are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0 versions (`0.x.y`) reflect active Phase 1 development on synthetic data only; real client data remains unauthorized until `F03`–`F04` and the section 8 production audit verdict pass in `P1-13`.
 
+## [0.4.1] - 2026-11-27
+
+### Fixed (`P1-04` `AC01` Review Hardening — PR `#18` Follow-Up)
+
+- Added bounded keyset cursor pagination (`cursor` `1..256` chars, `limit` `1..200`, default `200`, plus `nextCursor: string | null`) to `GET /api/v1/projects/{projectId}/sessions` (`apps/api/src/sessions/{sessions.dto,sessions.controller,sessions.service}.ts`), preserving `items: SessionDto[]`, `(startedAt DESC, createdAt DESC, id DESC)` ordering, authentication (`401`), parent-project scoping (`404`), and `private, no-store, no-transform` headers while encoding full 6-digit microsecond UTC timestamps (`TIMESTAMPTZ(6)`) + UUIDs so tied start times and sub-millisecond `createdAt` rows page with zero gaps or duplicates.
+- Regenerated `apps/api/openapi.json` and `@qa-evidence-hub/api-client`, updated SSR `fetchProjectSessionsForOwner` (`apps/web/src/lib/api.ts`), and added keyboard-accessible `Older sessions` (and `Newest sessions` on older pages) pagination links on `/clients/[clientId]/projects/[projectId]` (`apps/web/app/clients/[clientId]/projects/[projectId]/page.tsx`), verified in Vitest/RTL, PostgreSQL 19 integration, and Playwright through Nginx (`200` fixture-seeded newer sessions + backdated `201`st session created through form, reached via keyboard `Older sessions`, opened, and reloaded).
+- Added `parseStrictIsoInstant` (`apps/api/src/common/validation.util.ts`) and updated `SessionsService.createSession` (`apps/api/src/sessions/sessions.service.ts`) to compare normalized microsecond UTC instants (`epochMicros`) across `Z` and `±HH:MM` offsets with up to `6` fractional digits before JavaScript `Date` conversion, rejecting sub-millisecond reversed time ranges (`2026-11-27T10:00:00.123100Z < 2026-11-27T10:00:00.123900Z`) with HTTP `400` `fieldErrors` on `endedAt` and `0` persisted rows while keeping swapped values, equal instants across offsets, and optional `endedAt` working; recorded audit run [20261127T162909Z-05c38bf](./audit/20261127T162909Z-05c38bf/README.md).
+
+### Security
+
+- Recorded an owner-approved, `postgres`-only, target/package/version/CVE-pinned 30-day (`2026-11-27` -> `2026-12-27`) container scan exception in `scripts/container-scan-exceptions.json` and `.github/docs/runbook.md` for `CVE-2025-6020` (`libpam* 1.5.2-6+deb12u2` in Debian `12.15`, where `postgres` uses `gosu` without PAM/`pam_namespace` on unexposed `internal: true` `data_net`) pending an upstream Docker Hub `postgres:19-bookworm` rebuild containing `1.5.2-6+deb12u3`.
+
 ## [0.4.0] - 2026-11-23
 
 ### Added (`P1-04` — Engagement context: clients, projects, and test sessions)
