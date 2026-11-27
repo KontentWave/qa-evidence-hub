@@ -339,20 +339,17 @@ test.describe('@P1-04 @S1 @AC01 @AC07 @browser Nginx engagement context workflow
         res.request().method() === 'POST' &&
         new URL(res.url()).pathname === `/api/v1/projects/${seeded.projectId}/sessions`,
     );
-    const postSubmitDocPromise = page.waitForResponse(
-      (res) =>
-        res.request().method() === 'GET' &&
-        res.request().isNavigationRequest() &&
-        new URL(res.url()).pathname === projectPagePath,
-    );
 
     await page.getByRole('button', { name: 'Create session' }).click();
     const createPostRes = await createPostPromise;
     expect(createPostRes.status()).toBe(201);
-    const postSubmitDocRes = await postSubmitDocPromise;
-    expect(postSubmitDocRes.status()).toBe(200);
+    // Wait until CreateSessionForm's window.location.assign reload finishes rendering the 201-session page.
+    await expect(page.getByRole('link', { name: 'Older sessions', exact: true })).toBeVisible();
+    await page.waitForLoadState('load');
 
     // 4. Visit the project afresh, verify the first 200 newest sessions omit the backdated 201st session, and follow "Older sessions" via keyboard.
+    await page.goto('/clients');
+    await expect(page.getByRole('heading', { level: 1, name: 'Clients' })).toBeVisible();
     const freshVisitRes = await page.goto(projectPagePath);
     expect(freshVisitRes).not.toBeNull();
     expect(freshVisitRes!.status()).toBe(200);
