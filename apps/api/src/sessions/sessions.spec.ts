@@ -4,7 +4,7 @@ import type { AuthenticatedActor } from '../auth/auth.decorators';
 import { RequestValidationException } from '../common/http-exception.filter';
 import type { PrismaService } from '../prisma/prisma.service';
 import { SessionsController } from './sessions.controller';
-import { SessionsService } from './sessions.service';
+import { encodeSessionCursor, SessionsService } from './sessions.service';
 
 const ACTOR: AuthenticatedActor = {
   ownerId: '11111111-2222-4333-8444-555555555555',
@@ -15,13 +15,15 @@ const ACTOR: AuthenticatedActor = {
 
 const PROJECT_ID = '22222222-3333-4444-8555-666666666666';
 const SESSION_ID = '33333333-4444-4555-8666-777777777777';
+const OLDER_SESSION_ID = '33333333-4444-4555-8666-777777777776';
 
 describe('SessionsService & SessionsController', () => {
-  it('enforces actor authorization, timestamp/range validation, active-project status, and parent scoping', async () => {
+  it('enforces actor authorization, timestamp/range validation, active-project status, bounded cursor pagination, and parent scoping', async () => {
     const fixedDate = new Date('2026-10-06T09:00:00.000Z');
     const fixedEnd = new Date('2026-10-06T10:30:00.000Z');
+    const olderDate = new Date('2026-10-05T09:00:00.000Z');
 
-    const queryRawMock = vi
+    const txQueryRawMock = vi
       .fn()
       .mockResolvedValueOnce([]) // missing parent project
       .mockResolvedValueOnce([{ id: PROJECT_ID, status: 'Archived' }]) // archived project
@@ -64,25 +66,66 @@ describe('SessionsService & SessionsController', () => {
     const projectFindUnique = vi
       .fn()
       .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: PROJECT_ID })
       .mockResolvedValueOnce({ id: PROJECT_ID });
 
-    const sessionFindMany = vi.fn(async () => [
-      {
-        id: SESSION_ID,
-        projectId: PROJECT_ID,
-        purpose: 'Checkout regression',
-        startedAt: fixedDate,
-        endedAt: null,
-        environment: null,
-        device: null,
-        os: null,
-        browser: null,
-        buildVersion: null,
-        notes: null,
-        createdAt: fixedDate,
-        updatedAt: fixedDate,
-      },
-    ]);
+    const listQueryRawMock = vi
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          id: SESSION_ID,
+          projectId: PROJECT_ID,
+          purpose: 'Checkout regression',
+          startedAt: fixedDate,
+          endedAt: null,
+          environment: null,
+          device: null,
+          os: null,
+          browser: null,
+          buildVersion: null,
+          notes: null,
+          createdAt: fixedDate,
+          updatedAt: fixedDate,
+          startedAtCursor: '2026-10-06T09:00:00.000000Z',
+          createdAtCursor: '2026-10-06T09:00:00.123456Z',
+        },
+        {
+          id: OLDER_SESSION_ID,
+          projectId: PROJECT_ID,
+          purpose: 'Older session',
+          startedAt: olderDate,
+          endedAt: null,
+          environment: null,
+          device: null,
+          os: null,
+          browser: null,
+          buildVersion: null,
+          notes: null,
+          createdAt: olderDate,
+          updatedAt: olderDate,
+          startedAtCursor: '2026-10-05T09:00:00.000000Z',
+          createdAtCursor: '2026-10-05T09:00:00.000000Z',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: OLDER_SESSION_ID,
+          projectId: PROJECT_ID,
+          purpose: 'Older session',
+          startedAt: olderDate,
+          endedAt: null,
+          environment: null,
+          device: null,
+          os: null,
+          browser: null,
+          buildVersion: null,
+          notes: null,
+          createdAt: olderDate,
+          updatedAt: olderDate,
+          startedAtCursor: '2026-10-05T09:00:00.000000Z',
+          createdAtCursor: '2026-10-05T09:00:00.000000Z',
+        },
+      ]);
 
     const sessionFindFirst = vi
       .fn()
@@ -104,7 +147,7 @@ describe('SessionsService & SessionsController', () => {
       .mockResolvedValueOnce(null);
 
     const txClient = {
-      $queryRaw: queryRawMock,
+      $queryRaw: txQueryRawMock,
       testSession: {
         create: sessionCreateMock,
       },
@@ -113,9 +156,9 @@ describe('SessionsService & SessionsController', () => {
     const service = new SessionsService({
       client: {
         $transaction: async <T>(cb: (tx: typeof txClient) => Promise<T>) => cb(txClient),
+        $queryRaw: listQueryRawMock,
         project: { findUnique: projectFindUnique },
         testSession: {
-          findMany: sessionFindMany,
           findFirst: sessionFindFirst,
         },
       },
@@ -161,6 +204,26 @@ describe('SessionsService & SessionsController', () => {
         purpose: 'Test',
         startedAt: '2026-10-06T10:00:00Z',
         endedAt: '2026-10-06T09:59:59Z',
+      }),
+    ).rejects.toMatchObject({
+      fieldErrors: [{ field: 'endedAt' }],
+    });
+
+    await expect(
+      service.createSession(ACTOR, PROJECT_ID, {
+        purpose: 'Sub-millisecond reversed range',
+        startedAt: '2026-11-27T10:00:00.123900Z',
+        endedAt: '2026-11-27T10:00:00.123100Z',
+      }),
+    ).rejects.toMatchObject({
+      fieldErrors: [{ field: 'endedAt' }],
+    });
+
+    await expect(
+      service.createSession(ACTOR, PROJECT_ID, {
+        purpose: 'Offset sub-millisecond reversed range',
+        startedAt: '2026-11-27T12:00:00.123900+02:00',
+        endedAt: '2026-11-27T11:00:00.123100+01:00',
       }),
     ).rejects.toMatchObject({
       fieldErrors: [{ field: 'endedAt' }],
@@ -217,12 +280,71 @@ describe('SessionsService & SessionsController', () => {
     );
     expect(closedSession.endedAt).toBe('2026-10-06T10:30:00.000Z');
 
-    // List: missing project -> 404, existing project -> items
+    // List: invalid limit/cursor -> 400, missing project -> 404, paginated pages -> items + nextCursor
+    for (const badLimit of [0, 201, 1.5]) {
+      await expect(
+        service.listSessions(ACTOR, PROJECT_ID, { limit: badLimit }),
+      ).rejects.toMatchObject({
+        fieldErrors: [{ field: 'limit' }],
+      });
+    }
+
+    const nonCanonicalBase64Url = 'ab'; // 'ab' decodes to 1 byte 'i', re-encodes to 'aQ' !== 'ab'
+    const wrongPartCountCursor = Buffer.from('only-two|parts', 'utf8').toString('base64url');
+    const badFormatCursor = Buffer.from(
+      `2026-10-06T09:00:00Z|2026-10-06T09:00:00.000000Z|${SESSION_ID}`,
+      'utf8',
+    ).toString('base64url');
+    const rolloverDateCursor = encodeSessionCursor({
+      startedAt: '2026-02-31T09:00:00.000000Z',
+      createdAt: '2026-10-06T09:00:00.000000Z',
+      id: SESSION_ID,
+    });
+    const rolloverCreatedCursor = encodeSessionCursor({
+      startedAt: '2026-10-06T09:00:00.000000Z',
+      createdAt: '2026-02-31T09:00:00.000000Z',
+      id: SESSION_ID,
+    });
+    const badUuidCursor = encodeSessionCursor({
+      startedAt: '2026-10-06T09:00:00.000000Z',
+      createdAt: '2026-10-06T09:00:00.000000Z',
+      id: 'not-a-uuid',
+    });
+
+    for (const badCursor of [
+      '   ',
+      'bad+chars/not=base64url',
+      nonCanonicalBase64Url,
+      wrongPartCountCursor,
+      badFormatCursor,
+      rolloverDateCursor,
+      rolloverCreatedCursor,
+      badUuidCursor,
+    ]) {
+      await expect(
+        service.listSessions(ACTOR, PROJECT_ID, { cursor: badCursor }),
+      ).rejects.toMatchObject({
+        fieldErrors: [{ field: 'cursor' }],
+      });
+    }
+
     await expect(controller.listSessions({ projectId: PROJECT_ID }, {}, ACTOR)).rejects.toThrow(
       NotFoundException,
     );
-    const listed = await controller.listSessions({ projectId: PROJECT_ID }, {}, ACTOR);
-    expect(listed.items).toHaveLength(1);
+
+    const firstPage = await controller.listSessions({ projectId: PROJECT_ID }, { limit: 1 }, ACTOR);
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.items[0]?.id).toBe(SESSION_ID);
+    expect(typeof firstPage.nextCursor).toBe('string');
+
+    const secondPage = await controller.listSessions(
+      { projectId: PROJECT_ID },
+      { cursor: firstPage.nextCursor ?? undefined },
+      ACTOR,
+    );
+    expect(secondPage.items).toHaveLength(1);
+    expect(secondPage.items[0]?.id).toBe(OLDER_SESSION_ID);
+    expect(secondPage.nextCursor).toBeNull();
 
     // Get: matching (projectId, sessionId) -> detail, mismatch -> 404, bad UUID -> 400
     const detail = await controller.getSession(

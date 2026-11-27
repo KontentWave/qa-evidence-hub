@@ -604,7 +604,7 @@ Then('no session is created', async function (this: EngagementWorld) {
     .get(`/api/v1/projects/${this.currentProject.id}/sessions`)
     .set('Cookie', serializeCookieJar(this.cookies));
   assert.equal(listRes.status, 200);
-  assert.deepEqual(listRes.body, { items: [] });
+  assert.deepEqual(listRes.body, { items: [], nextCursor: null });
 
   const pgClient = new pg.Client({ connectionString: this.databaseUrl });
   await pgClient.connect();

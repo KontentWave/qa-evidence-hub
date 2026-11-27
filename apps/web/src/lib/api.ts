@@ -2,15 +2,24 @@ import 'server-only';
 import {
   type ClientSummary,
   createApiClient,
+  type ListProjectSessionsQuery,
   type OwnerSummary,
   type ProjectSummary,
   type QaEvidenceHubApiClient,
+  type TestSessionListResponse,
   type TestSessionSummary,
 } from '@qa-evidence-hub/api-client';
 import { cookies } from 'next/headers';
 import { notFound, redirect } from 'next/navigation';
 
-export type { ClientSummary, OwnerSummary, ProjectSummary, TestSessionSummary };
+export type {
+  ClientSummary,
+  ListProjectSessionsQuery,
+  OwnerSummary,
+  ProjectSummary,
+  TestSessionListResponse,
+  TestSessionSummary,
+};
 
 export type SsrReadResult<T> =
   | { readonly kind: 'ok'; readonly data: T }
@@ -303,12 +312,18 @@ export async function fetchClientProjectDetailForOwner(
   }
 }
 
+const SAFE_SESSION_CURSOR_REGEX = /^[A-Za-z0-9_-]{1,256}$/;
+
 export async function fetchProjectSessionsForOwner(
   projectId: string,
   rawSessionCookie?: string,
+  query?: ListProjectSessionsQuery,
   customFetch: typeof globalThis.fetch = globalThis.fetch,
-): Promise<SsrReadResult<readonly TestSessionSummary[]>> {
+): Promise<SsrReadResult<TestSessionListResponse>> {
   if (!SAFE_UUID_REGEX.test(projectId)) {
+    return { kind: 'not_found' };
+  }
+  if (query?.cursor !== undefined && !SAFE_SESSION_CURSOR_REGEX.test(query.cursor)) {
     return { kind: 'not_found' };
   }
   const token = rawSessionCookie ?? (await getRawSessionCookie());
@@ -316,11 +331,18 @@ export async function fetchProjectSessionsForOwner(
   if (!client) {
     return { kind: 'unauthorized' };
   }
+  const normalizedQuery: ListProjectSessionsQuery = {
+    ...(query?.cursor !== undefined ? { cursor: query.cursor } : {}),
+    ...(query?.limit !== undefined ? { limit: query.limit } : {}),
+  };
   try {
     const { data, response } = await client.GET('/api/v1/projects/{projectId}/sessions', {
-      params: { path: { projectId } },
+      params: {
+        path: { projectId },
+        ...(Object.keys(normalizedQuery).length > 0 ? { query: normalizedQuery } : {}),
+      },
     });
-    return classifyReadResponse(response.status, data?.items);
+    return classifyReadResponse(response.status, data);
   } catch {
     return { kind: 'error' };
   }

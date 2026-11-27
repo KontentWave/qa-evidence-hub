@@ -53,6 +53,58 @@
       "expiresOn": "2027-02-19",
       "docRef": ".github/docs/runbook.md#4-dependency-and-container-vulnerability-policy",
       "rationale": "Stock Debian ssl-cert package placeholder snakeoil key baked into official debian:bookworm / postgres:19-bookworm base layers; PostgreSQL runs unexposed on Docker internal:true data_net and never uses this snakeoil key for public or client TLS."
+    },
+    {
+      "imageRole": "postgres",
+      "kind": "vulnerability",
+      "target": "/scan/postgres.tar (debian 12.15)",
+      "pkgName": "libpam-modules",
+      "installedVersion": "1.5.2-6+deb12u2",
+      "vulnerabilityIds": ["CVE-2025-6020"],
+      "reviewedAt": "2026-11-27",
+      "reviewedBy": "KontentWave",
+      "expiresOn": "2026-12-27",
+      "docRef": ".github/docs/runbook.md#4-dependency-and-container-vulnerability-policy",
+      "rationale": "Official postgres:19-bookworm (Debian 12.15) has not yet been rebuilt upstream on Docker Hub with linux-pam 1.5.2-6+deb12u3 (CVE-2025-6020 pam_namespace symlink traversal). PostgreSQL runs unexposed on internal:true data_net using gosu (direct setuid/setgid/execve without PAM or pam_namespace) with zero interactive login sessions; remove once upstream postgres:19-bookworm ships 1.5.2-6+deb12u3."
+    },
+    {
+      "imageRole": "postgres",
+      "kind": "vulnerability",
+      "target": "/scan/postgres.tar (debian 12.15)",
+      "pkgName": "libpam-modules-bin",
+      "installedVersion": "1.5.2-6+deb12u2",
+      "vulnerabilityIds": ["CVE-2025-6020"],
+      "reviewedAt": "2026-11-27",
+      "reviewedBy": "KontentWave",
+      "expiresOn": "2026-12-27",
+      "docRef": ".github/docs/runbook.md#4-dependency-and-container-vulnerability-policy",
+      "rationale": "Official postgres:19-bookworm (Debian 12.15) has not yet been rebuilt upstream on Docker Hub with linux-pam 1.5.2-6+deb12u3 (CVE-2025-6020 pam_namespace symlink traversal). PostgreSQL runs unexposed on internal:true data_net using gosu (direct setuid/setgid/execve without PAM or pam_namespace) with zero interactive login sessions; remove once upstream postgres:19-bookworm ships 1.5.2-6+deb12u3."
+    },
+    {
+      "imageRole": "postgres",
+      "kind": "vulnerability",
+      "target": "/scan/postgres.tar (debian 12.15)",
+      "pkgName": "libpam-runtime",
+      "installedVersion": "1.5.2-6+deb12u2",
+      "vulnerabilityIds": ["CVE-2025-6020"],
+      "reviewedAt": "2026-11-27",
+      "reviewedBy": "KontentWave",
+      "expiresOn": "2026-12-27",
+      "docRef": ".github/docs/runbook.md#4-dependency-and-container-vulnerability-policy",
+      "rationale": "Official postgres:19-bookworm (Debian 12.15) has not yet been rebuilt upstream on Docker Hub with linux-pam 1.5.2-6+deb12u3 (CVE-2025-6020 pam_namespace symlink traversal). PostgreSQL runs unexposed on internal:true data_net using gosu (direct setuid/setgid/execve without PAM or pam_namespace) with zero interactive login sessions; remove once upstream postgres:19-bookworm ships 1.5.2-6+deb12u3."
+    },
+    {
+      "imageRole": "postgres",
+      "kind": "vulnerability",
+      "target": "/scan/postgres.tar (debian 12.15)",
+      "pkgName": "libpam0g",
+      "installedVersion": "1.5.2-6+deb12u2",
+      "vulnerabilityIds": ["CVE-2025-6020"],
+      "reviewedAt": "2026-11-27",
+      "reviewedBy": "KontentWave",
+      "expiresOn": "2026-12-27",
+      "docRef": ".github/docs/runbook.md#4-dependency-and-container-vulnerability-policy",
+      "rationale": "Official postgres:19-bookworm (Debian 12.15) has not yet been rebuilt upstream on Docker Hub with linux-pam 1.5.2-6+deb12u3 (CVE-2025-6020 pam_namespace symlink traversal). PostgreSQL runs unexposed on internal:true data_net using gosu (direct setuid/setgid/execve without PAM or pam_namespace) with zero interactive login sessions; remove once upstream postgres:19-bookworm ships 1.5.2-6+deb12u3."
     }
   ]
 }

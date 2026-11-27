@@ -420,6 +420,11 @@ export interface components {
         };
         SessionListResponseDto: {
             items: components["schemas"]["SessionDto"][];
+            /**
+             * @description Opaque cursor for fetching older sessions, or null when no older sessions remain
+             * @example null
+             */
+            nextCursor: string | null;
         };
     };
     responses: never;
@@ -893,7 +898,12 @@ export interface operations {
     };
     listProjectSessions: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Opaque cursor from a previous page nextCursor to fetch older sessions */
+                cursor?: string;
+                /** @description Maximum number of sessions to return per page (1 to 200, default 200) */
+                limit?: number;
+            };
             header?: never;
             path: {
                 projectId: string;
@@ -911,7 +921,7 @@ export interface operations {
                     "application/json": components["schemas"]["SessionListResponseDto"];
                 };
             };
-            /** @description Invalid project ID format */
+            /** @description Invalid project ID, cursor, limit, or undeclared query parameter */
             400: {
                 headers: {
                     [name: string]: unknown;
